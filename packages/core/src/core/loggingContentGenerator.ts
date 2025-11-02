@@ -33,6 +33,7 @@ import { CodeAssistServer } from '../code_assist/server.js';
 import { toContents } from '../code_assist/converter.js';
 import { isStructuredError } from '../utils/quotaErrorDetection.js';
 import { runInDevTraceSpan, type SpanMetadata } from '../telemetry/trace.js';
+import { debugLogger } from '../utils/debugLogger.js';
 
 interface StructuredError {
   status: number;
@@ -46,6 +47,9 @@ export class LoggingContentGenerator implements ContentGenerator {
     private readonly wrapped: ContentGenerator,
     private readonly config: Config,
   ) {}
+
+  // Prevent duplicate final reply logging for the same prompt
+  private loggedFinals: Set<string> = new Set();
 
   getWrapped(): ContentGenerator {
     return this.wrapped;
@@ -183,6 +187,23 @@ export class LoggingContentGenerator implements ContentGenerator {
             req,
             userPromptId,
           );
+          // Print model reply text for debugging
+          try {
+            const parts = response?.candidates?.[0]?.content?.parts ?? [];
+            const text = parts
+              .map((p: unknown) =>
+                typeof (p as { text?: string })?.text === 'string'
+                  ? (p as { text: string }).text
+                  : '',
+              )
+              .filter((t: string) => t.length > 0)
+              .join('\n');
+            if (text) {
+              debugLogger.log('[LLM Reply]', text);
+            }
+          } catch {
+            // Ignore errors when extracting debug text
+          }
           spanMetadata.output = {
             response,
             usageMetadata: response.usageMetadata,
@@ -300,6 +321,29 @@ export class LoggingContentGenerator implements ContentGenerator {
         req.config,
         serverDetails,
       );
+      // Print final aggregated text once for streaming responses
+      try {
+        const finalText = responses
+          .map((r) => {
+            const parts = r?.candidates?.[0]?.content?.parts ?? [];
+            return parts
+              .map((p: unknown) =>
+                typeof (p as { text?: string })?.text === 'string'
+                  ? (p as { text: string }).text
+                  : '',
+              )
+              .join('');
+          })
+          .join('');
+        if (finalText) {
+          if (!this.loggedFinals.has(userPromptId)) {
+            debugLogger.log('[LLM Reply]', finalText);
+            this.loggedFinals.add(userPromptId);
+          }
+        }
+      } catch {
+        // Ignore errors when extracting final debug text
+      }
       spanMetadata.output = {
         streamChunks: responses.map((r) => ({
           content: r.candidates?.[0]?.content ?? null,

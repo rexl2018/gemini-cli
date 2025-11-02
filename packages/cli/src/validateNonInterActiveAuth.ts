@@ -12,6 +12,11 @@ import { type LoadedSettings } from './config/settings.js';
 import { handleError } from './utils/errors.js';
 
 function getAuthTypeFromEnv(): AuthType | undefined {
+  // Detect BYOK env configuration
+  if (process.env['LLM_BYOK_API_KEY'] || process.env['LLM_BYOK_ENDPOINT']) {
+    return AuthType.USE_LLM_BYOK;
+  }
+
   if (process.env['GOOGLE_GENAI_USE_GCA'] === 'true') {
     return AuthType.LOGIN_WITH_GOOGLE;
   }
@@ -42,7 +47,7 @@ export async function validateNonInteractiveAuth(
     }
 
     if (!effectiveAuthType) {
-      const message = `Please set an Auth method in your ${USER_SETTINGS_PATH} or specify one of the following environment variables before running: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA`;
+      const message = `Please set an Auth method in your ${USER_SETTINGS_PATH} or specify one of the following environment variables before running: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA, LLM_BYOK_API_KEY/OPENAI_API_KEY (with LLM_BYOK_ENDPOINT)`;
       throw new Error(message);
     }
 

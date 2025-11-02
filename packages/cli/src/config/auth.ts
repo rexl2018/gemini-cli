@@ -9,6 +9,10 @@ import { loadEnvironment, loadSettings } from './settings.js';
 
 export function validateAuthMethod(authMethod: string): string | null {
   loadEnvironment(loadSettings().merged);
+  if (authMethod === AuthType.USE_LLM_BYOK) {
+    return null;
+  }
+
   if (
     authMethod === AuthType.LOGIN_WITH_GOOGLE ||
     authMethod === AuthType.CLOUD_SHELL

@@ -62,6 +62,11 @@ export function AuthDialog({
       value: AuthType.USE_VERTEX_AI,
       key: AuthType.USE_VERTEX_AI,
     },
+    {
+      label: 'BYOK',
+      value: AuthType.USE_LLM_BYOK,
+      key: AuthType.USE_LLM_BYOK,
+    },
   ];
 
   if (settings.merged.security?.auth?.enforcedType) {
@@ -90,6 +95,15 @@ export function AuthDialog({
 
     if (process.env['GEMINI_API_KEY']) {
       return item.value === AuthType.USE_GEMINI;
+    }
+
+    // Prefer BYOK if relevant environment variables are present
+    if (
+      process.env['LLM_BYOK_API_KEY'] ||
+      process.env['OPENAI_API_KEY'] ||
+      process.env['LLM_BYOK_ENDPOINT']
+    ) {
+      return item.value === AuthType.USE_LLM_BYOK;
     }
 
     return item.value === AuthType.LOGIN_WITH_GOOGLE;

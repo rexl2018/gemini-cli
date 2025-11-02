@@ -23,6 +23,8 @@ import { InstallationManager } from '../utils/installationManager.js';
 import { FakeContentGenerator } from './fakeContentGenerator.js';
 import { RecordingContentGenerator } from './recordingContentGenerator.js';
 
+import { OpenAICompatibleContentGenerator } from './openAICompatibleContentGenerator.js';
+
 /**
  * Interface abstracting the core functionalities for generating content and counting tokens.
  */
@@ -49,6 +51,7 @@ export enum AuthType {
   USE_GEMINI = 'gemini-api-key',
   USE_VERTEX_AI = 'vertex-ai',
   CLOUD_SHELL = 'cloud-shell',
+  USE_LLM_BYOK = 'llm_byok',
 }
 
 export type ContentGeneratorConfig = {
@@ -75,6 +78,11 @@ export async function createContentGeneratorConfig(
     authType,
     proxy: config?.getProxy(),
   };
+
+  // if we are using LLM with your own key, no auth needed
+  if (authType === AuthType.USE_LLM_BYOK) {
+    return contentGeneratorConfig;
+  }
 
   // If we are using Google auth or we are in Cloud Shell, there is nothing else to validate for now
   if (
@@ -112,6 +120,20 @@ export async function createContentGenerator(
   const generator = await (async () => {
     if (gcConfig.fakeResponses) {
       return FakeContentGenerator.fromFile(gcConfig.fakeResponses);
+    }
+    if (config.authType === AuthType.USE_LLM_BYOK) {
+      return new LoggingContentGenerator(
+        new OpenAICompatibleContentGenerator({
+          endpoint:
+            process.env['LLM_BYOK_ENDPOINT'] || 'http://localhost:11434/v1',
+          model: process.env['LLM_BYOK_MODEL'] || 'gemma3:latest',
+          apiKey:
+            process.env['LLM_BYOK_API_KEY'] || process.env['OPENAI_API_KEY'],
+          endpoint_postfix:
+            process.env['LLM_BYOK_ENDPOINT_POSTFIX'] || '/chat/completions',
+        }),
+        gcConfig,
+      );
     }
     const version = process.env['CLI_VERSION'] || process.version;
     const userAgent = `GeminiCLI/${version} (${process.platform}; ${process.arch})`;

@@ -274,7 +274,7 @@ export async function main() {
       settings.setValue(
         SettingScope.User,
         'selectedAuthType',
-        AuthType.CLOUD_SHELL,
+        AuthType.USE_LLM_BYOK,
       );
     }
   }

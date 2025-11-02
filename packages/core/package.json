@@ -1,6 +1,6 @@
 {
   "name": "@google/gemini-cli-core",
-  "version": "0.13.0-nightly.20251031.c89bc30d",
+  "version": "1.13.0",
   "description": "Gemini CLI Core",
   "repository": {
     "type": "git",
@@ -41,6 +41,7 @@
     "@xterm/headless": "5.5.0",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.0",
+    "axios": "^1.13.1",
     "chardet": "^2.1.0",
     "diff": "^7.0.0",
     "dotenv": "^17.1.0",
@@ -57,6 +58,7 @@
     "mime": "4.0.7",
     "mnemonist": "^0.40.3",
     "open": "^10.1.2",
+    "openai": "^4.58.0",
     "picomatch": "^4.0.1",
     "read-package-up": "^11.0.0",
     "shell-quote": "^1.8.3",
