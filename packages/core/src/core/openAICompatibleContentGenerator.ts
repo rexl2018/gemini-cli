@@ -577,8 +577,16 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
 
     // 解析 SSE 流
     for await (const chunk of this.parseSSEStream(response.data)) {
-      const delta = chunk?.choices?.[0]?.delta as OpenAIChoiceDelta | undefined;
-      const finish = chunk?.choices?.[0]?.finish_reason || null;
+      const chunkData = chunk as {
+        choices?: Array<{
+          delta?: OpenAIChoiceDelta;
+          finish_reason?: string | null;
+        }>;
+      };
+      const delta = chunkData?.choices?.[0]?.delta as
+        | OpenAIChoiceDelta
+        | undefined;
+      const finish = chunkData?.choices?.[0]?.finish_reason || null;
 
       if (delta?.content) {
         const emitParts: Part[] = delta.content
