@@ -166,6 +166,41 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     }
   }
 
+  // NEW: Build a sanitized cURL command for reproducing requests (Authorization redacted)
+  private buildCurlCommand(
+    url: string,
+    headersObj: unknown,
+    bodyObj: unknown,
+  ): string {
+    const headers: Record<string, string> = {};
+    try {
+      const h = headersObj as Record<string, unknown>;
+      // Flatten common axios headers structure
+      const maybeCommon = (h?.['common'] ?? {}) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(maybeCommon)) {
+        if (typeof v === 'string') headers[k] = v;
+      }
+      for (const [k, v] of Object.entries(h || {})) {
+        if (typeof v === 'string') headers[k] = v;
+      }
+    } catch {
+      // ignore
+    }
+    // Redact Authorization
+    if (headers['Authorization'])
+      headers['Authorization'] = 'Bearer <REDACTED>';
+    const headerFlags = Object.entries(headers)
+      .map(([k, v]) => `-H '${k}: ${v}'`)
+      .join(' ');
+    let body = '';
+    try {
+      body = JSON.stringify(bodyObj ?? {});
+    } catch {
+      body = '{}';
+    }
+    return `curl -X POST '${url}' ${headerFlags} -d '${body}'`;
+  }
+
   // 将 Node 可读流读取为字符串，避免循环结构导致的 JSON 序列化错误
   private async readStreamToString(stream: unknown): Promise<string> {
     try {
@@ -417,11 +452,14 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
           }
           // Only emit a tool result if we can match a prior tool_call id
           let toolCallId: string | undefined = fr.id;
-          if (!toolCallId && fr.name) {
-            const queue = pendingToolCallIds.get(fr.name);
-            if (queue && queue.length > 0) {
-              toolCallId = queue.shift();
-              pendingToolCallIds.set(fr.name, queue);
+          // Fallback: if id is missing OR id does not exist in recorded tool_calls, try matching by name queue
+          if (!toolCallId || (toolCallId && !allToolCallIds.has(toolCallId))) {
+            if (fr.name) {
+              const queue = pendingToolCallIds.get(fr.name);
+              if (queue && queue.length > 0) {
+                toolCallId = queue.shift();
+                pendingToolCallIds.set(fr.name, queue);
+              }
             }
           }
           if (!toolCallId) {
@@ -429,10 +467,19 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
             continue;
           }
           usedToolCallIds.add(toolCallId);
+          // Wrap tool response content into a structured JSON string to improve backend compatibility
+          const toolContent = (() => {
+            try {
+              const parsed = JSON.parse(payload);
+              return JSON.stringify({ name: fr.name, result: parsed });
+            } catch {
+              return JSON.stringify({ name: fr.name, result: payload });
+            }
+          })();
           out.push({
             role: 'tool',
             tool_call_id: toolCallId,
-            content: payload,
+            content: toolContent,
           });
         }
       }
@@ -459,7 +506,73 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       }
     }
 
+    // NEW: Prune tool messages whose tool_call_id does not match any assistant tool_call id
+    // This prevents sending extra tool results when the prior tool_calls are not present in the message history
+    if (out.length > 0) {
+      for (let i = out.length - 1; i >= 0; i--) {
+        const msg = out[i] as OpenAIToolMessage | OpenAIMessage;
+        if (msg && (msg as { role: string }).role === 'tool') {
+          const toolMsg = msg as OpenAIToolMessage;
+          if (
+            !toolMsg.tool_call_id ||
+            !allToolCallIds.has(toolMsg.tool_call_id)
+          ) {
+            // Remove unmatched tool result to satisfy backend constraint
+            out.splice(i, 1);
+          }
+        }
+      }
+    }
+
     return out;
+  }
+
+  // NEW: helper to summarize tool_call and tool result counts for debugging
+  private getToolCounts(messages: Array<OpenAIMessage | OpenAIToolMessage>): {
+    calls: number;
+    results: number;
+    missingResults: number; // assistant tool_calls without matching tool result
+    orphanResults: number; // tool results without matching assistant tool_call
+    missingIds: string[]; // IDs of assistant tool_calls without matching result
+    orphanIds: string[]; // IDs of tool results without matching call
+  } {
+    let calls = 0;
+    let results = 0;
+    const callIds = new Set<string>();
+    const resultIds = new Set<string>();
+    for (const m of messages || []) {
+      const role = (m as { role?: string }).role;
+      if (
+        role === 'assistant' &&
+        Array.isArray((m as OpenAIMessage).tool_calls)
+      ) {
+        for (const tc of (m as OpenAIMessage).tool_calls!) {
+          calls++;
+          const id = (tc as OpenAIToolCall)?.id;
+          if (typeof id === 'string' && id) callIds.add(id);
+        }
+      } else if (role === 'tool') {
+        results++;
+        const tid = (m as OpenAIToolMessage).tool_call_id;
+        if (typeof tid === 'string' && tid) resultIds.add(tid);
+      }
+    }
+    const missingIds: string[] = [];
+    for (const id of callIds) {
+      if (!resultIds.has(id)) missingIds.push(id);
+    }
+    const orphanIds: string[] = [];
+    for (const id of resultIds) {
+      if (!callIds.has(id)) orphanIds.push(id);
+    }
+    return {
+      calls,
+      results,
+      missingResults: missingIds.length,
+      orphanResults: orphanIds.length,
+      missingIds,
+      orphanIds,
+    };
   }
 
   private logRequestDebug(request: GenerateContentParameters) {
@@ -577,6 +690,14 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       ...(tools ? { tools } : {}),
     };
 
+    // NEW: log tool_call/result counts for better error diagnostics
+    const counts = this.getToolCounts(
+      messages as Array<OpenAIMessage | OpenAIToolMessage>,
+    );
+    debugLogger.log(
+      `[OpenAICompSend] tool_calls=${counts.calls}, tool_results=${counts.results}, missing_results=${counts.missingResults}, orphan_results=${counts.orphanResults}, missing_ids=${JSON.stringify(counts.missingIds)}, orphan_ids=${JSON.stringify(counts.orphanIds)}`,
+    );
+
     try {
       const response = await this.axios.post('', requestBody);
       debugLogger.log(
@@ -614,6 +735,19 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       debugLogger.log(
         `[OpenAI Debug] Request Headers: ${this.stringifyForLog(this.axios.defaults.headers)}`,
       );
+      // NEW: include tool counts alongside error body
+      debugLogger.log(
+        `[OpenAI Debug] ToolCounts: calls=${counts.calls}, results=${counts.results}, missing_results=${counts.missingResults}, orphan_results=${counts.orphanResults}, missing_ids=${JSON.stringify(counts.missingIds)}, orphan_ids=${JSON.stringify(counts.orphanIds)}`,
+      );
+      // NEW: Log reproducible cURL when 400 occurs (sanitized)
+      if (status === 400) {
+        const curl = this.buildCurlCommand(
+          String(this.axios.defaults.baseURL || ''),
+          this.axios.defaults.headers,
+          requestBody,
+        );
+        debugLogger.log(`[OpenAI Debug] cURL: ${curl}`);
+      }
       debugLogger.log(`[OpenAI Debug] Error Response Body: ${errorBody}`);
       throw error;
     }
@@ -663,6 +797,14 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       ...(tools ? { tools } : {}),
     };
 
+    // NEW: log tool_call/result counts for stream requests
+    const counts = this.getToolCounts(
+      messages as Array<OpenAIMessage | OpenAIToolMessage>,
+    );
+    debugLogger.log(
+      `[OpenAICompSend] (stream) tool_calls=${counts.calls}, tool_results=${counts.results}, missing_results=${counts.missingResults}, orphan_results=${counts.orphanResults}, missing_ids=${JSON.stringify(counts.missingIds)}, orphan_ids=${JSON.stringify(counts.orphanIds)}`,
+    );
+
     let response;
     try {
       response = await this.axios.post('', requestBody, {
@@ -699,6 +841,19 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       debugLogger.log(
         `[OpenAI Debug] Request Headers: ${this.stringifyForLog(this.axios.defaults.headers)}`,
       );
+      // NEW: include tool counts alongside error body
+      debugLogger.log(
+        `[OpenAI Debug] ToolCounts: calls=${counts.calls}, results=${counts.results}, missing_results=${counts.missingResults}, orphan_results=${counts.orphanResults}, missing_ids=${JSON.stringify(counts.missingIds)}, orphan_ids=${JSON.stringify(counts.orphanIds)}`,
+      );
+      // NEW: Log reproducible cURL when 400 occurs (sanitized)
+      if (status === 400) {
+        const curl = this.buildCurlCommand(
+          String(this.axios.defaults.baseURL || ''),
+          this.axios.defaults.headers,
+          requestBody,
+        );
+        debugLogger.log(`[OpenAI Debug] cURL: ${curl}`);
+      }
       debugLogger.log(`[OpenAI Debug] Error Response Body: ${errorBody}`);
       throw error;
     }
@@ -810,3 +965,20 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     return { embeddings: [] };
   }
 }
+
+// NEW: OpenAI message types used for request/response shaping
+type OpenAIToolCall = {
+  id: string;
+  type: 'function';
+  function: { name?: string; arguments: string };
+};
+type OpenAIMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+  tool_calls?: OpenAIToolCall[];
+};
+type OpenAIToolMessage = {
+  role: 'tool';
+  tool_call_id: string;
+  content: string;
+};

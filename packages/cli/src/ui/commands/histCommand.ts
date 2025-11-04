@@ -66,7 +66,7 @@ const listCommand: SlashCommand = {
 const listnCommand: SlashCommand = {
   name: 'listn',
   description:
-    'List the last N entries of the current conversation. Usage: /conversation listn <n>',
+    'List the last N entries of the current conversation. Usage: /hist listn <n>',
   kind: CommandKind.BUILT_IN,
   action: async (context, args): Promise<void | MessageActionReturn> => {
     const nStr = args.trim();
@@ -75,7 +75,7 @@ const listnCommand: SlashCommand = {
       return {
         type: 'message',
         messageType: 'error',
-        content: 'Invalid number. Usage: /conversation listn <n>',
+        content: 'Invalid number. Usage: /hist listn <n>',
       };
     }
 
@@ -109,9 +109,9 @@ const listnCommand: SlashCommand = {
 };
 
 const deleteCommand: SlashCommand = {
-  name: 'delete',
+  name: 'del',
   description:
-    'Delete the Nth entry from the current conversation. Usage: /conversation delete <n>',
+    'Delete the Nth entry from the current conversation. Usage: /hist del <n>',
   kind: CommandKind.BUILT_IN,
   action: async (context, args): Promise<MessageActionReturn> => {
     const nStr = args.trim();
@@ -120,7 +120,7 @@ const deleteCommand: SlashCommand = {
       return {
         type: 'message',
         messageType: 'error',
-        content: 'Invalid number. Usage: /conversation delete <n>',
+        content: 'Invalid number. Usage: /hist del <n>',
       };
     }
 
@@ -155,9 +155,9 @@ const deleteCommand: SlashCommand = {
 };
 
 const deleteSinceCommand: SlashCommand = {
-  name: 'delete-since',
+  name: 'del-since',
   description:
-    'Delete entries from index N to the end. Usage: /conversation delete-since <n>',
+    'Delete entries from index N to the end. Usage: /hist del-since <n>',
   kind: CommandKind.BUILT_IN,
   action: async (context, args): Promise<MessageActionReturn> => {
     const nStr = args.trim();
@@ -166,7 +166,7 @@ const deleteSinceCommand: SlashCommand = {
       return {
         type: 'message',
         messageType: 'error',
-        content: 'Invalid number. Usage: /conversation delete-since <n>',
+        content: 'Invalid number. Usage: /hist del-since <n>',
       };
     }
 
@@ -200,9 +200,62 @@ const deleteSinceCommand: SlashCommand = {
   },
 };
 
-export const conversationCommand: SlashCommand = {
-  name: 'conversation',
+const deleteBeforeCommand: SlashCommand = {
+  name: 'del-before',
+  description:
+    'Delete entries from the beginning up to index N (inclusive). Usage: /hist del-before <n>',
+  kind: CommandKind.BUILT_IN,
+  action: async (context, args): Promise<MessageActionReturn> => {
+    const nStr = args.trim();
+    const n = Number.parseInt(nStr, 10);
+    if (!nStr || Number.isNaN(n) || n <= 0) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: 'Invalid number. Usage: /hist del-before <n>',
+      };
+    }
+
+    const client = context.services.config?.getGeminiClient();
+    const chat = await client?.getChat();
+    if (!chat) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: 'No chat client available to modify conversation history.',
+      };
+    }
+
+    const history = chat.getHistory();
+    if (n > history.length) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: `Invalid index. There are only ${history.length} entries in history.`,
+      };
+    }
+
+    // Remove entries from 1..n (inclusive) => keep entries from index n onward
+    const newHistory = history.slice(n);
+    client!.setHistory(newHistory);
+
+    return {
+      type: 'message',
+      messageType: 'info',
+      content: `Conversation history entries from #1 to #${n} deleted.`,
+    };
+  },
+};
+
+export const histCommand: SlashCommand = {
+  name: 'hist',
   description: 'Operate and manage the current conversation history',
   kind: CommandKind.BUILT_IN,
-  subCommands: [listCommand, listnCommand, deleteCommand, deleteSinceCommand],
+  subCommands: [
+    listCommand,
+    listnCommand,
+    deleteCommand,
+    deleteSinceCommand,
+    deleteBeforeCommand,
+  ],
 };

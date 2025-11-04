@@ -204,15 +204,74 @@ export class BaseLlmClient {
   }
 
   private cleanJsonResponse(text: string, model: string): string {
-    const prefix = '```json';
-    const suffix = '```';
-    if (text.startsWith(prefix) && text.endsWith(suffix)) {
+    const trimmed = text.trim();
+
+    // Fast-path: already looks like plain JSON object/array
+    if (
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))
+    ) {
+      return trimmed;
+    }
+
+    // Handle fenced code blocks: ```json ... ``` or ``` ... ```
+    const fenceMatch = /```(?:json|JSON)?\s*([\s\S]*?)```/m.exec(trimmed);
+    if (fenceMatch) {
       logMalformedJsonResponse(
         this.config,
         new MalformedJsonResponseEvent(model),
       );
-      return text.substring(prefix.length, text.length - suffix.length).trim();
+      return fenceMatch[1].trim();
     }
-    return text;
+
+    // Generic extraction: try to find the first JSON-looking segment within extra commentary
+    const firstObjIdx = trimmed.indexOf('{');
+    const firstArrIdx = trimmed.indexOf('[');
+    const hasObj = firstObjIdx !== -1;
+    const hasArr = firstArrIdx !== -1;
+
+    if (!hasObj && !hasArr) {
+      // No JSON delimiters found; return as-is (caller will attempt parse and handle error/retry)
+      return trimmed;
+    }
+
+    // Prefer whichever JSON start delimiter appears first
+    const startIdx =
+      hasObj && hasArr
+        ? Math.min(firstObjIdx, firstArrIdx)
+        : hasObj
+          ? firstObjIdx
+          : firstArrIdx;
+    const startChar = trimmed[startIdx];
+    const closingChar = startChar === '{' ? '}' : ']';
+
+    const candidateRegion = trimmed.slice(startIdx);
+
+    // Try up to N closing positions from the end to find a valid JSON substring
+    const MAX_ATTEMPTS = 20;
+    let attempts = 0;
+    for (
+      let i = candidateRegion.length - 1;
+      i >= 0 && attempts < MAX_ATTEMPTS;
+      i--
+    ) {
+      if (candidateRegion[i] !== closingChar) continue;
+      attempts++;
+      const candidate = candidateRegion.slice(0, i + 1);
+      try {
+        JSON.parse(candidate);
+        // Found a valid JSON segment
+        logMalformedJsonResponse(
+          this.config,
+          new MalformedJsonResponseEvent(model),
+        );
+        return candidate.trim();
+      } catch {
+        // keep trying with the previous closing token
+      }
+    }
+
+    // If extraction fails, return original trimmed text (will lead to parse error and retry)
+    return trimmed;
   }
 }
