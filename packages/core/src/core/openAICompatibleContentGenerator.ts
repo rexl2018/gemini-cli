@@ -395,6 +395,11 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
           };
         });
 
+      const hasFunctionResponse = (parts as unknown[]).some(
+        (p) =>
+          (p as { functionResponse?: unknown }).functionResponse !== undefined,
+      );
+
       if (role === 'assistant') {
         const message: OpenAIMessage = {
           role: 'assistant',
@@ -407,7 +412,11 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
           out.push(message);
         }
       } else {
-        if (text && text.trim()) {
+        // For non-assistant roles:
+        // If this Content includes functionResponse parts, defer emitting its text
+        // and instead embed it into the subsequent tool result messages (extra_text).
+        // Otherwise (pure text content), emit it immediately.
+        if (text && text.trim() && !hasFunctionResponse) {
           out.push({ role: role as 'system' | 'user', content: text });
         }
       }
@@ -471,9 +480,21 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
           const toolContent = (() => {
             try {
               const parsed = JSON.parse(payload);
-              return JSON.stringify({ name: fr.name, result: parsed });
+              return JSON.stringify({
+                name: fr.name,
+                result: parsed,
+                ...(role !== 'assistant' && hasFunctionResponse && text
+                  ? { extra_text: text }
+                  : {}),
+              });
             } catch {
-              return JSON.stringify({ name: fr.name, result: payload });
+              return JSON.stringify({
+                name: fr.name,
+                result: payload,
+                ...(role !== 'assistant' && hasFunctionResponse && text
+                  ? { extra_text: text }
+                  : {}),
+              });
             }
           })();
           out.push({
@@ -483,6 +504,10 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
           });
         }
       }
+
+      // Do not emit additional non-assistant text here; when functionResponse exists,
+      // it has been embedded into tool result as extra_text. For pure text messages,
+      // we've already emitted above.
     }
 
     // Prune unmatched tool_calls to satisfy backend requirement: tool result counts must equal tool call counts
