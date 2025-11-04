@@ -37,7 +37,7 @@ interface OpenAIChoiceMessage {
   tool_calls?: Array<{
     id?: string;
     type?: string;
-    function?: { name?: string; arguments?: string };
+    function?: { name?: string; arguments: string };
   }>;
 }
 
@@ -166,6 +166,31 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     }
   }
 
+  // 将 Node 可读流读取为字符串，避免循环结构导致的 JSON 序列化错误
+  private async readStreamToString(stream: unknown): Promise<string> {
+    try {
+      const readable = stream as {
+        setEncoding?: (enc: string) => void;
+        on: (event: string, cb: (...args: unknown[]) => void) => void;
+      };
+      return await new Promise<string>((resolve, reject) => {
+        let buffer = '';
+        try {
+          readable.setEncoding?.('utf8');
+        } catch {
+          // ignore
+        }
+        readable.on('data', (chunk: unknown) => {
+          buffer += typeof chunk === 'string' ? chunk : String(chunk);
+        });
+        readable.on('end', () => resolve(buffer));
+        readable.on('error', (err: unknown) => reject(err));
+      });
+    } catch {
+      return '[unserializable]';
+    }
+  }
+
   private async *parseSSEStream(
     stream: AsyncIterable<Buffer>,
   ): AsyncGenerator<unknown> {
@@ -278,7 +303,9 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       content: string;
     };
     const out: Array<OpenAIMessage | OpenAIToolMessage> = [];
-    const lastToolCallIdByName = new Map<string, string>();
+    const pendingToolCallIds = new Map<string, string[]>();
+    const allToolCallIds = new Set<string>();
+    const usedToolCallIds = new Set<string>();
     const genToolCallId = (name?: string) =>
       `${name || 'tool'}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -317,9 +344,12 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
           ).functionCall!;
           const name = fc.name;
           const id = fc.id || genToolCallId(name);
-          if (name) {
-            lastToolCallIdByName.set(name, id);
+          if (name && id) {
+            const queue = pendingToolCallIds.get(name) || [];
+            queue.push(id);
+            pendingToolCallIds.set(name, queue);
           }
+          allToolCallIds.add(id);
           return {
             id,
             type: 'function',
@@ -385,18 +415,46 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
               payload = '[functionResponse]';
             }
           }
-          const toolCallId =
-            fr.id ||
-            (fr.name ? lastToolCallIdByName.get(fr.name) : undefined) ||
-            genToolCallId(fr.name);
-          if (fr.name) {
-            lastToolCallIdByName.set(fr.name, toolCallId);
+          // Only emit a tool result if we can match a prior tool_call id
+          let toolCallId: string | undefined = fr.id;
+          if (!toolCallId && fr.name) {
+            const queue = pendingToolCallIds.get(fr.name);
+            if (queue && queue.length > 0) {
+              toolCallId = queue.shift();
+              pendingToolCallIds.set(fr.name, queue);
+            }
           }
+          if (!toolCallId) {
+            // Skip emitting unmatched tool result to avoid count mismatch
+            continue;
+          }
+          usedToolCallIds.add(toolCallId);
           out.push({
             role: 'tool',
             tool_call_id: toolCallId,
             content: payload,
           });
+        }
+      }
+    }
+
+    // Prune unmatched tool_calls to satisfy backend requirement: tool result counts must equal tool call counts
+    if (allToolCallIds.size > usedToolCallIds.size) {
+      const unmatchedIds = new Set<string>();
+      for (const id of allToolCallIds) {
+        if (!usedToolCallIds.has(id)) unmatchedIds.add(id);
+      }
+      if (unmatchedIds.size > 0) {
+        for (let i = 0; i < out.length; i++) {
+          const msg = out[i];
+          if (msg && (msg as { role: string }).role === 'assistant') {
+            const m = msg as OpenAIMessage;
+            if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+              m.tool_calls = m.tool_calls.filter(
+                (tc) => !unmatchedIds.has(tc.id),
+              );
+            }
+          }
         }
       }
     }
@@ -519,12 +577,46 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       ...(tools ? { tools } : {}),
     };
 
-    const response = await this.axios.post('', requestBody);
-
-    debugLogger.log(
-      `[OpenAICompRaw] response: ${this.stringifyForLog(response.data)}`,
-    );
-    return this.convertFromOpenAIResponse(response.data as OpenAIResponseLike);
+    try {
+      const response = await this.axios.post('', requestBody);
+      debugLogger.log(
+        `[OpenAICompRaw] response: ${this.stringifyForLog(response.data)}`,
+      );
+      return this.convertFromOpenAIResponse(
+        response.data as OpenAIResponseLike,
+      );
+    } catch (error) {
+      // 只在错误时打印详细调试信息
+      const axiosError = error as {
+        response?: { data?: unknown; status?: number };
+        message?: string;
+      };
+      const status = axiosError.response?.status ?? 'unknown';
+      let errorBody = '';
+      const respData = axiosError.response?.data;
+      if (typeof respData === 'string') {
+        errorBody = respData;
+      } else if (
+        respData &&
+        typeof (respData as { on?: unknown }).on === 'function'
+      ) {
+        errorBody = await this.readStreamToString(respData);
+      } else {
+        errorBody = this.stringifyForLog(respData || axiosError.message);
+      }
+      debugLogger.log(`[OpenAI Debug] Request failed with status ${status}`);
+      debugLogger.log(
+        `[OpenAI Debug] Request URL: ${this.axios.defaults.baseURL}`,
+      );
+      debugLogger.log(
+        `[OpenAI Debug] Request Body: ${this.stringifyForLog(requestBody)}`,
+      );
+      debugLogger.log(
+        `[OpenAI Debug] Request Headers: ${this.stringifyForLog(this.axios.defaults.headers)}`,
+      );
+      debugLogger.log(`[OpenAI Debug] Error Response Body: ${errorBody}`);
+      throw error;
+    }
   }
 
   async generateContentStream(
@@ -571,9 +663,45 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       ...(tools ? { tools } : {}),
     };
 
-    const response = await this.axios.post('', requestBody, {
-      responseType: 'stream',
-    });
+    let response;
+    try {
+      response = await this.axios.post('', requestBody, {
+        responseType: 'stream',
+      });
+    } catch (error) {
+      // 只在错误时打印详细调试信息
+      const axiosError = error as {
+        response?: { data?: unknown; status?: number };
+        message?: string;
+      };
+      const status = axiosError.response?.status ?? 'unknown';
+      let errorBody = '';
+      const respData = axiosError.response?.data;
+      if (typeof respData === 'string') {
+        errorBody = respData;
+      } else if (
+        respData &&
+        typeof (respData as { on?: unknown }).on === 'function'
+      ) {
+        errorBody = await this.readStreamToString(respData);
+      } else {
+        errorBody = this.stringifyForLog(respData || axiosError.message);
+      }
+      debugLogger.log(
+        `[OpenAI Debug] Stream request failed with status ${status}`,
+      );
+      debugLogger.log(
+        `[OpenAI Debug] Request URL: ${this.axios.defaults.baseURL}`,
+      );
+      debugLogger.log(
+        `[OpenAI Debug] Request Body: ${this.stringifyForLog(requestBody)}`,
+      );
+      debugLogger.log(
+        `[OpenAI Debug] Request Headers: ${this.stringifyForLog(this.axios.defaults.headers)}`,
+      );
+      debugLogger.log(`[OpenAI Debug] Error Response Body: ${errorBody}`);
+      throw error;
+    }
 
     // 解析 SSE 流
     for await (const chunk of this.parseSSEStream(response.data)) {

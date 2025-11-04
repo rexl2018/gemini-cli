@@ -14,6 +14,7 @@ import type {
 import type { Config } from '../config/config.js';
 import type { ContentGenerator } from './contentGenerator.js';
 import { getResponseText } from '../utils/partUtils.js';
+import { debugLogger } from '../utils/debugLogger.js';
 import { reportError } from '../utils/errorReporting.js';
 import { getErrorMessage } from '../utils/errors.js';
 import { logMalformedJsonResponse } from '../telemetry/loggers.js';
@@ -116,7 +117,13 @@ export class BaseLlmClient {
         try {
           JSON.parse(this.cleanJsonResponse(text, model));
           return false;
-        } catch (_e) {
+        } catch (e) {
+          if (this.config.getDebugMode()) {
+            debugLogger.warn(
+              `Failed to parse JSON response:\n---\n${text}\n---\n`,
+              e,
+            );
+          }
           return true;
         }
       };
