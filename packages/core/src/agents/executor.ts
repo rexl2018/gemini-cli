@@ -187,7 +187,7 @@ export class AgentExecutor<TOutput extends z.ZodTypeAny> {
 
         const promptId = `${this.agentId}#${turnCounter++}`;
 
-        const { functionCalls } = await promptIdContext.run(
+        const { functionCalls, textResponse } = await promptIdContext.run(
           promptId,
           async () =>
             this.callModel(chat, currentMessage, tools, signal, promptId),
@@ -200,6 +200,12 @@ export class AgentExecutor<TOutput extends z.ZodTypeAny> {
 
         // If the model stops calling tools without calling complete_task, it's an error.
         if (functionCalls.length === 0) {
+          // If the model provided a textual response, treat it as implicit completion.
+          if (textResponse && textResponse.trim().length > 0) {
+            terminateReason = AgentTerminateMode.GOAL;
+            finalResult = textResponse.trim();
+            break;
+          }
           terminateReason = AgentTerminateMode.ERROR;
           finalResult = `Agent stopped calling tools but did not call '${TASK_COMPLETE_TOOL_NAME}' to finalize the session.`;
           this.emitActivity('ERROR', {
