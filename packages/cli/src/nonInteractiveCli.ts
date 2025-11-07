@@ -223,6 +223,17 @@ export async function runNonInteractive({
                 parameters: event.value.args,
               });
             }
+            // NEW: Detailed tool call request logging
+            try {
+              const argsStr = JSON.stringify(event.value.args);
+              debugLogger.log(
+                `[NonInteractiveCLI] ToolCallRequest received: name=${event.value.name}, id=${event.value.callId}, args=${argsStr}`,
+              );
+            } catch {
+              debugLogger.log(
+                `[NonInteractiveCLI] ToolCallRequest received: name=${event.value.name}, id=${event.value.callId}`,
+              );
+            }
             toolCallRequests.push(event.value);
           } else if (event.type === GeminiEventType.LoopDetected) {
             if (streamFormatter) {
@@ -252,13 +263,52 @@ export async function runNonInteractive({
           const toolResponseParts: Part[] = [];
           const completedToolCalls: CompletedToolCall[] = [];
 
+          // NEW: Summary logging before execution
+          try {
+            const summary = toolCallRequests
+              .map((r) => `${r.name}#${r.callId}`)
+              .join(', ');
+            debugLogger.log(
+              `[NonInteractiveCLI] Executing ${toolCallRequests.length} tool call(s): ${summary}`,
+            );
+          } catch {
+            debugLogger.log(
+              `[NonInteractiveCLI] Executing ${toolCallRequests.length} tool call(s)`,
+            );
+          }
+
           for (const requestInfo of toolCallRequests) {
+            // NEW: Start execution logging
+            debugLogger.log(
+              `[NonInteractiveCLI] Tool execution start: name=${requestInfo.name}, id=${requestInfo.callId}`,
+            );
+
             const completedToolCall = await executeToolCall(
               config,
               requestInfo,
               abortController.signal,
             );
             const toolResponse = completedToolCall.response;
+
+            // NEW: End execution logging with status and brief output
+            try {
+              const status = toolResponse.error ? 'error' : 'success';
+              const partsCount = Array.isArray(toolResponse.responseParts)
+                ? toolResponse.responseParts.length
+                : 0;
+              const displayPreview =
+                typeof toolResponse.resultDisplay === 'string'
+                  ? toolResponse.resultDisplay.slice(0, 200)
+                  : undefined;
+              const errMsg = toolResponse.error?.message || 'none';
+              debugLogger.log(
+                `[NonInteractiveCLI] Tool execution end: name=${requestInfo.name}, id=${requestInfo.callId}, status=${status}, parts=${partsCount}, display=${displayPreview ? JSON.stringify(displayPreview) : 'none'}, error=${errMsg}`,
+              );
+            } catch {
+              debugLogger.log(
+                `[NonInteractiveCLI] Tool execution end: name=${requestInfo.name}, id=${requestInfo.callId}`,
+              );
+            }
 
             completedToolCalls.push(completedToolCall);
 
@@ -311,7 +361,22 @@ export async function runNonInteractive({
             );
           }
 
-          currentMessages = [{ role: 'user', parts: toolResponseParts }];
+          // NEW: To ensure OpenAI-compatible generator can thread tool results correctly, include the assistant tool_call parts
+          try {
+            const assistantToolCalls: Part[] = toolCallRequests.map((r) => ({
+              functionCall: { name: r.name, args: r.args, id: r.callId },
+            }));
+            currentMessages = [
+              { role: 'model', parts: assistantToolCalls },
+              { role: 'user', parts: toolResponseParts },
+            ];
+            debugLogger.log(
+              `[NonInteractiveCLI] Prepared follow-up messages with assistant tool_calls (${assistantToolCalls.length}) and tool results (${toolResponseParts.length} parts).`,
+            );
+          } catch {
+            // fallback to original behavior
+            currentMessages = [{ role: 'user', parts: toolResponseParts }];
+          }
         } else {
           // Emit final result event for streaming JSON
           if (streamFormatter) {

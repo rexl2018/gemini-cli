@@ -201,6 +201,17 @@ export class LoggingContentGenerator implements ContentGenerator {
             if (text) {
               debugLogger.log('[LLM Reply]', text);
             }
+            // Also log any function calls present in the response
+            const fnParts = (parts as unknown[]).filter(
+              (p) => !!(p as { functionCall?: unknown }).functionCall,
+            );
+            if (fnParts.length > 0) {
+              debugLogger.log(`[LLM FuncCalls] ${JSON.stringify(fnParts)}`);
+            } else {
+              debugLogger.log('[LLM FuncCalls] none');
+            }
+            // Log raw response payload for debugging
+            debugLogger.log(`[LLM Raw Response] ${JSON.stringify(response)}`);
           } catch {
             // Ignore errors when extracting debug text
           }

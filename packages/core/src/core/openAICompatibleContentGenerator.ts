@@ -189,16 +189,22 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     // Redact Authorization
     if (headers['Authorization'])
       headers['Authorization'] = 'Bearer <REDACTED>';
-    const headerFlags = Object.entries(headers)
-      .map(([k, v]) => `-H '${k}: ${v}'`)
-      .join(' ');
+    // Build header flags lines (each on its own line with shell continuation)
+    const headerLines = Object.entries(headers)
+      .map(([k, v]) => `  -H '${k}: ${v}' \\\n`)
+      .join('');
+
+    // Pretty-print JSON body
     let body = '';
     try {
-      body = JSON.stringify(bodyObj ?? {});
+      body = JSON.stringify(bodyObj ?? {}, null, 2);
     } catch {
       body = '{}';
     }
-    return `curl -X POST '${url}' ${headerFlags} -d '${body}'`;
+
+    // Emit heredoc-based cURL so users can copy-paste safely even with single quotes inside JSON
+    const cmd = `curl -X POST '${url}' \\\n${headerLines}  --data-binary @- <<'JSON'\n${body}\nJSON`;
+    return cmd;
   }
 
   // 将 Node 可读流读取为字符串，避免循环结构导致的 JSON 序列化错误
@@ -280,6 +286,157 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       }
     }
     return openAITools.length > 0 ? openAITools : undefined;
+  }
+
+  // NEW: convert tools into Responses API format (flat shape)
+  private convertToolsToResponsesFormat(tools: unknown):
+    | Array<{
+        type: 'function';
+        name?: string;
+        description?: string;
+        parameters?: unknown;
+      }>
+    | undefined {
+    if (!tools || !Array.isArray(tools)) return undefined;
+    const respTools: Array<{
+      type: 'function';
+      name?: string;
+      description?: string;
+      parameters?: unknown;
+    }> = [];
+    for (const group of tools) {
+      const fns = group?.functionDeclarations;
+      if (Array.isArray(fns)) {
+        for (const fn of fns) {
+          respTools.push({
+            type: 'function',
+            name: fn.name,
+            description: fn.description,
+            parameters: fn.parametersJsonSchema || { type: 'object' },
+          });
+        }
+      }
+    }
+    return respTools.length > 0 ? respTools : undefined;
+  }
+
+  // removed prepareResponsesInput - superseded by buildResponsesInputFromMessages
+
+  // NEW: build Responses API input array like the validated curl: include system, user text, assistant tool_calls, and tool results
+  private buildResponsesInputFromMessages(
+    messages: Array<
+      | {
+          role: 'system' | 'user' | 'assistant' | 'developer';
+          content: string;
+          tool_calls?: Array<{
+            id: string;
+            type: 'function';
+            function: { name?: string; arguments: string };
+          }>;
+        }
+      | { role: 'tool'; tool_call_id: string; content: string }
+    >,
+  ): Array<
+    | {
+        role: 'assistant' | 'system' | 'user' | 'developer';
+        content: Array<{ type: string; text: string }>;
+      }
+    | {
+        type: 'function_call';
+        call_id?: string;
+        name?: string;
+        arguments?: string;
+      }
+    | { type: 'function_call_output'; call_id: string; output: string }
+  > {
+    const input: Array<
+      | {
+          role: 'assistant' | 'system' | 'user' | 'developer';
+          content: Array<{ type: string; text: string }>;
+        }
+      | {
+          type: 'function_call';
+          call_id?: string;
+          name?: string;
+          arguments?: string;
+        }
+      | { type: 'function_call_output'; call_id: string; output: string }
+    > = [];
+
+    for (const m of messages || []) {
+      const role = (m as { role?: string }).role as
+        | 'system'
+        | 'user'
+        | 'assistant'
+        | 'developer'
+        | 'tool'
+        | undefined;
+      const text = (m as { content?: string }).content || '';
+
+      if (
+        role === 'assistant' ||
+        role === 'system' ||
+        role === 'user' ||
+        role === 'developer'
+      ) {
+        // Map text content according to provider constraints
+        if (typeof text === 'string' && text.trim().length > 0) {
+          const contentType =
+            role === 'assistant' ? 'output_text' : 'input_text';
+          input.push({
+            role,
+            content: [{ type: contentType, text: text.trim() }],
+          });
+        }
+        // Emit function_call entries as separate items (not inside content), if present
+        const tcs =
+          (
+            m as {
+              tool_calls?: Array<{
+                id: string;
+                function: { name?: string; arguments: string };
+              }>;
+            }
+          ).tool_calls || [];
+        for (const tc of tcs) {
+          input.push({
+            type: 'function_call',
+            call_id: tc.id || undefined,
+            name: tc.function?.name,
+            arguments: tc.function?.arguments,
+          });
+        }
+        continue;
+      }
+
+      if (role === 'tool') {
+        // Convert tool result to function_call_output with call_id and output
+        const toolMsg = m as {
+          role: 'tool';
+          tool_call_id: string;
+          content: string;
+        };
+        const outputStr =
+          typeof toolMsg.content === 'string'
+            ? toolMsg.content
+            : JSON.stringify(toolMsg.content);
+        if (toolMsg.tool_call_id) {
+          input.push({
+            type: 'function_call_output',
+            call_id: toolMsg.tool_call_id,
+            output: outputStr,
+          });
+        }
+        continue;
+      }
+    }
+
+    // Fallback: ensure non-empty input (minimal user input)
+    if (input.length === 0) {
+      input.push({ role: 'user', content: [{ type: 'input_text', text: '' }] });
+    }
+
+    return input;
   }
 
   private toMessages(contents: ContentListUnion): Array<
@@ -600,6 +757,63 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     };
   }
 
+  // NEW: env-based switch for Responses API vs Chat/Completions
+  private shouldUseResponsesApi(): boolean {
+    const v = process.env['LLM_BYOK_RESPONSE_API'];
+    return !!v && v !== '0';
+  }
+
+  // NEW: pick proper URL according to env and known path patterns
+  private getTargetURL(useResponses: boolean): string {
+    const base = String(this.axios.defaults.baseURL || '');
+    if (!base) return '';
+    let url = base;
+    if (useResponses) {
+      url = url.includes('/v2/crawl')
+        ? url.replace(/\/v2\/crawl\/?/, '/responses')
+        : url;
+    } else {
+      // chat/completions
+      url = url.includes('/responses')
+        ? url.replace(/\/responses\/?/, '/v2/crawl')
+        : url;
+    }
+    // Normalize any accidental slash before query string, e.g. '/responses/?ak=...'
+    url = url
+      .replace('/responses/?', '/responses?')
+      .replace('/v2/crawl/?', '/v2/crawl?');
+    return url;
+  }
+
+  // Helper: check if Responses API payload includes any tool_call entries
+  private hasResponsesToolCalls(resData: unknown): boolean {
+    try {
+      const data = resData as Record<string, unknown>;
+      const output = (data?.['output'] ?? []) as Array<Record<string, unknown>>;
+      for (const item of output) {
+        const type = String(item['type'] ?? '');
+        if (type === 'tool_call' || type === 'function_call') return true;
+        if (type === 'message') {
+          const contentArr = (item['content'] ?? []) as Array<
+            Record<string, unknown>
+          >;
+          if (
+            Array.isArray(contentArr) &&
+            contentArr.some((c) => {
+              const ctype = String(c['type'] ?? '');
+              return ctype === 'tool_call' || ctype === 'function_call';
+            })
+          ) {
+            return true;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+
   private logRequestDebug(request: GenerateContentParameters) {
     const contentsArray: Content[] = (() => {
       const c = request.contents as unknown;
@@ -662,7 +876,7 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       {
         content: { role: 'model', parts },
         index: 0,
-        finishReason: ((): FinishReason | undefined => {
+        finishReason: (() => {
           const fr = choice?.finish_reason;
           if (!fr) return undefined;
           if (fr === 'stop') return FinishReason.STOP;
@@ -681,6 +895,106 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
         }
       : undefined;
     return new OpenAIGenerateContentResponse(candidates, usage);
+  }
+
+  // NEW: converter for Responses API generic shape
+  private convertFromResponsesApi(resData: unknown): GenerateContentResponse {
+    const data = resData as Record<string, unknown> | undefined;
+    const output = (data?.['output'] ?? []) as Array<Record<string, unknown>>;
+    const parts: Part[] = [];
+
+    for (const item of output) {
+      const type = String(item['type'] ?? '');
+      if (type === 'output_text') {
+        const text = String(item['text'] ?? '');
+        if (text) parts.push({ text });
+      } else if (type === 'message') {
+        // Some providers wrap outputs in a 'message' with a 'content' array
+        const contentArr = (item['content'] ?? []) as Array<
+          Record<string, unknown>
+        >;
+        for (const c of contentArr) {
+          const ctype = String(c['type'] ?? '');
+          if (ctype === 'output_text') {
+            const text = String(c['text'] ?? '');
+            if (text) parts.push({ text });
+          } else if (ctype === 'tool_call' || ctype === 'function_call') {
+            const name = String(c['name'] ?? 'tool');
+            const id = String(
+              (c as Record<string, unknown>)['call_id'] ??
+                (c as Record<string, unknown>)['id'] ??
+                '',
+            );
+            let args: Record<string, unknown> = {};
+            const rawArgs = (c as Record<string, unknown>)['arguments'];
+            try {
+              if (typeof rawArgs === 'string') args = JSON.parse(rawArgs);
+              else if (typeof rawArgs === 'object' && rawArgs)
+                args = rawArgs as Record<string, unknown>;
+            } catch {
+              // ignore parse error
+            }
+            parts.push({ functionCall: { name, args, id } } as Part);
+          }
+        }
+      } else if (type === 'tool_call' || type === 'function_call') {
+        const name = String(item['name'] ?? 'tool');
+        const id = String(item['call_id'] ?? item['id'] ?? '');
+        let args: Record<string, unknown> = {};
+        const rawArgs = item['arguments'];
+        try {
+          if (typeof rawArgs === 'string') args = JSON.parse(rawArgs);
+          else if (typeof rawArgs === 'object' && rawArgs)
+            args = rawArgs as Record<string, unknown>;
+        } catch {
+          // ignore parse error
+        }
+        parts.push({ functionCall: { name, args, id } } as Part);
+      }
+    }
+
+    // Debug: log parsed outputs including any tool calls
+    try {
+      const toolParts = parts.filter(
+        (p) => !!(p as { functionCall?: unknown }).functionCall,
+      );
+      if (toolParts.length > 0) {
+        debugLogger.log(
+          `[OpenAICompRecv] (responses) tool_calls=${this.stringifyForLog(toolParts)}`,
+        );
+      } else {
+        debugLogger.log('[OpenAICompRecv] (responses) tool_calls=0');
+      }
+    } catch {
+      // ignore
+    }
+
+    const candidates: OpenAICandidate[] = [
+      {
+        content: { role: 'model', parts },
+        index: 0,
+        finishReason: FinishReason.STOP,
+      },
+    ];
+
+    const usageRaw = data?.['usage'] as Record<string, unknown> | undefined;
+    const usage = usageRaw
+      ? {
+          promptTokenCount: Number(usageRaw['input_token_count'] ?? 0),
+          candidatesTokenCount: Number(usageRaw['output_token_count'] ?? 0),
+          totalTokenCount: Number(
+            usageRaw['total_token_count'] ??
+              ((usageRaw['input_token_count'] as number) ?? 0) +
+                ((usageRaw['output_token_count'] as number) ?? 0),
+          ),
+        }
+      : undefined;
+
+    const resp = new OpenAIGenerateContentResponse(candidates, usage);
+    // attach response id if available
+    if (typeof data?.['response_id'] === 'string')
+      resp.responseId = String(data['response_id']);
+    return resp;
   }
 
   async generateContent(
@@ -704,16 +1018,71 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     }
 
     const tools = this.convertToolsToOpenAIFormat(req.config?.tools);
+    // Try to infer a preferred tool to force from the user message
+    const preferToolName = (() => {
+      try {
+        const merged = (messages || [])
+          .map((m) => (m as { content?: string }).content || '')
+          .join('\n')
+          .toLowerCase();
+        if (merged.includes('read_file')) return 'read_file';
+        return undefined;
+      } catch {
+        return undefined;
+      }
+    })();
 
-    const requestBody = {
-      model: this.config.model,
-      messages,
-      temperature: req.config?.temperature,
-      max_tokens: req.config?.maxOutputTokens,
-      top_p: req.config?.topP,
-      stream: false,
-      ...(tools ? { tools } : {}),
-    };
+    // Remove misplaced declarations in non-stream path: ensure no sawFinish/toolCallsBuffer here
+
+    const useResponses = this.shouldUseResponsesApi();
+    const url = this.getTargetURL(useResponses);
+    debugLogger.log(
+      `[OpenAIComp] Mode: Responses API=${useResponses}; Final URL=${url}`,
+    );
+
+    const requestBody = useResponses
+      ? {
+          model: this.config.model,
+          input: this.buildResponsesInputFromMessages(
+            messages as Array<
+              | {
+                  role: 'system' | 'user' | 'assistant';
+                  content: string;
+                  tool_calls?: Array<{
+                    id: string;
+                    type: 'function';
+                    function: { name?: string; arguments: string };
+                  }>;
+                }
+              | { role: 'tool'; tool_call_id: string; content: string }
+            >,
+          ),
+          // Use Responses API tool format if available; omit temperature/top_p/max_output_tokens to avoid 400
+          ...(this.convertToolsToResponsesFormat(req.config?.tools)
+            ? { tools: this.convertToolsToResponsesFormat(req.config?.tools) }
+            : {}),
+          // Force tool call to help with function calling reliability
+          tool_choice: preferToolName
+            ? { type: 'function', function: { name: preferToolName } }
+            : 'required',
+        }
+      : {
+          model: this.config.model,
+          messages,
+          temperature: req.config?.temperature,
+          max_tokens: req.config?.maxOutputTokens,
+          top_p: req.config?.topP,
+          stream: false,
+          ...(tools ? { tools } : {}),
+          // Force a tool call when tools are available
+          ...(tools && tools.length > 0
+            ? {
+                tool_choice: preferToolName
+                  ? { type: 'function', function: { name: preferToolName } }
+                  : 'required',
+              }
+            : {}),
+        };
 
     // NEW: log tool_call/result counts for better error diagnostics
     const counts = this.getToolCounts(
@@ -722,15 +1091,77 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     debugLogger.log(
       `[OpenAICompSend] tool_calls=${counts.calls}, tool_results=${counts.results}, missing_results=${counts.missingResults}, orphan_results=${counts.orphanResults}, missing_ids=${JSON.stringify(counts.missingIds)}, orphan_ids=${JSON.stringify(counts.orphanIds)}`,
     );
+    // NEW: Always log the cURL, headers and body for reproducing requests (sanitized)
+    try {
+      const curl = this.buildCurlCommand(
+        String(url || this.axios.defaults.baseURL || ''),
+        this.axios.defaults.headers,
+        requestBody,
+      );
+      debugLogger.log(`[OpenAI Debug] cURL: ${curl}`);
+      debugLogger.log(
+        `[OpenAI Debug] Request Body: ${this.stringifyForLog(requestBody)}`,
+      );
+      debugLogger.log(
+        `[OpenAI Debug] Request Headers: ${this.stringifyForLog(this.axios.defaults.headers)}`,
+      );
+      const sentTools = useResponses
+        ? this.convertToolsToResponsesFormat(req.config?.tools)
+        : tools;
+      if (Array.isArray(sentTools)) {
+        const names = sentTools
+          .map((t: unknown) =>
+            useResponses
+              ? (t as { name?: string }).name
+              : (t as { function?: { name?: string } }).function?.name,
+          )
+          .filter((n) => typeof n === 'string' && n.length > 0);
+        debugLogger.log(
+          `[OpenAICompSend] Tools sent (${names.length}): ${JSON.stringify(names)}`,
+        );
+      }
+    } catch {
+      // ignore debug/log errors
+    }
 
     try {
-      const response = await this.axios.post('', requestBody);
+      const response = await this.axios.post(url, requestBody);
       debugLogger.log(
         `[OpenAICompRaw] response: ${this.stringifyForLog(response.data)}`,
       );
-      return this.convertFromOpenAIResponse(
-        response.data as OpenAIResponseLike,
-      );
+      // Fallback: if Responses API returned no tool_call entries while tool_choice forced, retry via chat/completions
+      if (useResponses && !this.hasResponsesToolCalls(response.data)) {
+        debugLogger.log(
+          '[OpenAIComp] No tool_call in Responses result; falling back to chat/completions for tool calling',
+        );
+        const chatUrl = this.getTargetURL(false);
+        const chatBody = {
+          model: this.config.model,
+          messages,
+          temperature: req.config?.temperature,
+          max_tokens: req.config?.maxOutputTokens,
+          top_p: req.config?.topP,
+          stream: false,
+          ...(tools ? { tools } : {}),
+          ...(tools && tools.length > 0
+            ? {
+                tool_choice: preferToolName
+                  ? { type: 'function', function: { name: preferToolName } }
+                  : 'required',
+              }
+            : {}),
+        };
+        const chatResp = await this.axios.post(chatUrl, chatBody);
+        debugLogger.log(
+          `[OpenAICompRaw] (fallback chat) response: ${this.stringifyForLog(chatResp.data)}`,
+        );
+        return this.convertFromOpenAIResponse(
+          chatResp.data as OpenAIResponseLike,
+        );
+      }
+      return useResponses
+        ? this.convertFromResponsesApi(response.data)
+        : this.convertFromOpenAIResponse(response.data as OpenAIResponseLike);
     } catch (error) {
       // 只在错误时打印详细调试信息
       const axiosError = error as {
@@ -752,7 +1183,7 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       }
       debugLogger.log(`[OpenAI Debug] Request failed with status ${status}`);
       debugLogger.log(
-        `[OpenAI Debug] Request URL: ${this.axios.defaults.baseURL}`,
+        `[OpenAI Debug] Request URL: ${url || this.axios.defaults.baseURL}`,
       );
       debugLogger.log(
         `[OpenAI Debug] Request Body: ${this.stringifyForLog(requestBody)}`,
@@ -767,7 +1198,7 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       // NEW: Log reproducible cURL when 400 occurs (sanitized)
       if (status === 400) {
         const curl = this.buildCurlCommand(
-          String(this.axios.defaults.baseURL || ''),
+          String(url || this.axios.defaults.baseURL || ''),
           this.axios.defaults.headers,
           requestBody,
         );
@@ -805,12 +1236,113 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     }
 
     const tools = this.convertToolsToOpenAIFormat(req.config?.tools);
+    const preferToolName = (() => {
+      try {
+        const merged = (messages || [])
+          .map((m) => (m as { content?: string }).content || '')
+          .join('\n')
+          .toLowerCase();
+        if (merged.includes('read_file')) return 'read_file';
+        return undefined;
+      } catch {
+        return undefined;
+      }
+    })();
 
     let sawFinish = false;
     const toolCallsBuffer = new Map<
       number,
       { id?: string; name?: string; arguments: string }
     >();
+    const useResponses = this.shouldUseResponsesApi();
+    const url = this.getTargetURL(useResponses);
+    debugLogger.log(
+      `[OpenAIComp] Mode(stream): Responses API=${useResponses}; Final URL=${url}`,
+    );
+
+    // If Responses API is enabled, use single-response compatibility path
+    if (useResponses) {
+      const requestBody = {
+        model: this.config.model,
+        input: this.buildResponsesInputFromMessages(
+          messages as Array<
+            | {
+                role: 'system' | 'user' | 'assistant';
+                content: string;
+                tool_calls?: Array<{
+                  id: string;
+                  type: 'function';
+                  function: { name?: string; arguments: string };
+                }>;
+              }
+            | { role: 'tool'; tool_call_id: string; content: string }
+          >,
+        ),
+        // Use Responses API tool format if available; omit temperature/top_p/max_output_tokens to avoid 400
+        ...(this.convertToolsToResponsesFormat(req.config?.tools)
+          ? { tools: this.convertToolsToResponsesFormat(req.config?.tools) }
+          : {}),
+      };
+
+      // NEW: Always log the cURL, headers and body for reproducing requests (sanitized)
+      try {
+        const curl = this.buildCurlCommand(
+          String(url || this.axios.defaults.baseURL || ''),
+          this.axios.defaults.headers,
+          requestBody,
+        );
+        debugLogger.log(`[OpenAI Debug] cURL: ${curl}`);
+        debugLogger.log(
+          `[OpenAI Debug] Request Body: ${this.stringifyForLog(requestBody)}`,
+        );
+        debugLogger.log(
+          `[OpenAI Debug] Request Headers: ${this.stringifyForLog(this.axios.defaults.headers)}`,
+        );
+      } catch {
+        // ignore
+      }
+
+      try {
+        const response = await this.axios.post(url, requestBody);
+        // NEW: Log raw response body for streaming-responses single-response path
+        debugLogger.log(
+          `[OpenAICompRaw] (responses stream-single) response: ${this.stringifyForLog(response.data)}`,
+        );
+        const converted = this.convertFromResponsesApi(response.data);
+        yield converted;
+        return;
+      } catch (error) {
+        const axiosError = error as {
+          response?: { data?: unknown; status?: number };
+          message?: string;
+        };
+        const status = axiosError.response?.status ?? 'unknown';
+        let errorBody = '';
+        const respData = axiosError.response?.data;
+        if (typeof respData === 'string') {
+          errorBody = respData;
+        } else if (
+          respData &&
+          typeof (respData as { on?: unknown }).on === 'function'
+        ) {
+          errorBody = await this.readStreamToString(respData);
+        } else {
+          errorBody = this.stringifyForLog(respData || axiosError.message);
+        }
+        debugLogger.log(
+          `[OpenAI Debug] Responses stream-fallback request failed with status ${status}`,
+        );
+        debugLogger.log(`[OpenAI Debug] Request URL: ${url}`);
+        debugLogger.log(
+          `[OpenAI Debug] Request Body: ${this.stringifyForLog(requestBody)}`,
+        );
+        debugLogger.log(
+          `[OpenAI Debug] Request Headers: ${this.stringifyForLog(this.axios.defaults.headers)}`,
+        );
+        debugLogger.log(`[OpenAI Debug] Error Response Body: ${errorBody}`);
+        throw error;
+      }
+    }
 
     const requestBody = {
       model: this.config.model,
@@ -820,6 +1352,13 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       top_p: req.config?.topP,
       stream: true,
       ...(tools ? { tools } : {}),
+      ...(tools && tools.length > 0
+        ? {
+            tool_choice: preferToolName
+              ? { type: 'function', function: { name: preferToolName } }
+              : 'required',
+          }
+        : {}),
     };
 
     // NEW: log tool_call/result counts for stream requests
@@ -829,10 +1368,27 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     debugLogger.log(
       `[OpenAICompSend] (stream) tool_calls=${counts.calls}, tool_results=${counts.results}, missing_results=${counts.missingResults}, orphan_results=${counts.orphanResults}, missing_ids=${JSON.stringify(counts.missingIds)}, orphan_ids=${JSON.stringify(counts.orphanIds)}`,
     );
+    // NEW: Always log the cURL, headers and body for reproducing requests (sanitized)
+    try {
+      const curl = this.buildCurlCommand(
+        String(url || this.axios.defaults.baseURL || ''),
+        this.axios.defaults.headers,
+        requestBody,
+      );
+      debugLogger.log(`[OpenAI Debug] cURL: ${curl}`);
+      debugLogger.log(
+        `[OpenAI Debug] Request Body: ${this.stringifyForLog(requestBody)}`,
+      );
+      debugLogger.log(
+        `[OpenAI Debug] Request Headers: ${this.stringifyForLog(this.axios.defaults.headers)}`,
+      );
+    } catch {
+      // ignore
+    }
 
     let response;
     try {
-      response = await this.axios.post('', requestBody, {
+      response = await this.axios.post(url, requestBody, {
         responseType: 'stream',
       });
     } catch (error) {
@@ -857,9 +1413,7 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       debugLogger.log(
         `[OpenAI Debug] Stream request failed with status ${status}`,
       );
-      debugLogger.log(
-        `[OpenAI Debug] Request URL: ${this.axios.defaults.baseURL}`,
-      );
+      debugLogger.log(`[OpenAI Debug] Request URL: ${url}`);
       debugLogger.log(
         `[OpenAI Debug] Request Body: ${this.stringifyForLog(requestBody)}`,
       );
@@ -873,7 +1427,7 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       // NEW: Log reproducible cURL when 400 occurs (sanitized)
       if (status === 400) {
         const curl = this.buildCurlCommand(
-          String(this.axios.defaults.baseURL || ''),
+          String(url || this.axios.defaults.baseURL || ''),
           this.axios.defaults.headers,
           requestBody,
         );

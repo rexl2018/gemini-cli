@@ -29,6 +29,13 @@ import {
 } from '../../utils/messageInspectors.js';
 import { debugLogger } from '../../utils/debugLogger.js';
 
+// NEW: simple in-memory cache to avoid duplicate classifier calls in quick succession
+const classifierCache: Map<
+  string,
+  { requestKey: string; decision: RoutingDecision; expiresAt: number }
+> = new Map();
+const CLASSIFIER_CACHE_TTL_MS = 5000; // 5 seconds TTL to smooth out UI flicker retries
+
 const CLASSIFIER_GENERATION_CONFIG: GenerateContentConfig = {
   temperature: 0,
   maxOutputTokens: 1024,
@@ -170,6 +177,29 @@ export class ClassifierStrategy implements RoutingStrategy {
       // Take the last N turns from the *cleaned* history.
       const finalHistory = cleanHistory.slice(-HISTORY_TURNS_FOR_CONTEXT);
 
+      // NEW: build a requestKey for caching (user request + recent clean history)
+      const requestKey = JSON.stringify({
+        h: finalHistory.map((c) => ({ role: c.role, parts: c.parts?.length })),
+        r: context.request,
+      });
+
+      // Cache hit: same promptId & requestKey within TTL
+      const cached = classifierCache.get(promptId);
+      const now = Date.now();
+      if (
+        cached &&
+        cached.requestKey === requestKey &&
+        cached.expiresAt > now
+      ) {
+        debugLogger.log(
+          '[Router] ClassifierStrategy cache hit, reusing recent decision',
+        );
+        return cached.decision;
+      }
+      debugLogger.log(
+        '[Router] ClassifierStrategy cache miss/expired; invoking baseLlmClient.generateJson',
+      );
+
       const jsonResponse = await baseLlmClient.generateJson({
         contents: [...finalHistory, createUserContent(context.request)],
         schema: RESPONSE_SCHEMA,
@@ -178,6 +208,8 @@ export class ClassifierStrategy implements RoutingStrategy {
         config: CLASSIFIER_GENERATION_CONFIG,
         abortSignal: context.signal,
         promptId,
+        // Avoid multi-attempt retries for classifier: single attempt is sufficient
+        // maxAttempts: 1,
       });
 
       const routerResponse = ClassifierResponseSchema.parse(jsonResponse);
@@ -185,8 +217,9 @@ export class ClassifierStrategy implements RoutingStrategy {
       const reasoning = routerResponse.reasoning;
       const latencyMs = Date.now() - startTime;
 
+      let decision: RoutingDecision;
       if (routerResponse.model_choice === FLASH_MODEL) {
-        return {
+        decision = {
           model: DEFAULT_GEMINI_FLASH_MODEL,
           metadata: {
             source: 'Classifier',
@@ -195,7 +228,7 @@ export class ClassifierStrategy implements RoutingStrategy {
           },
         };
       } else {
-        return {
+        decision = {
           model: DEFAULT_GEMINI_MODEL,
           metadata: {
             source: 'Classifier',
@@ -204,6 +237,19 @@ export class ClassifierStrategy implements RoutingStrategy {
           },
         };
       }
+
+      debugLogger.log(
+        `[Router] ClassifierStrategy decision: model=${decision.model}; latencyMs=${latencyMs}`,
+      );
+
+      // Store in cache to avoid immediate duplicate retries
+      classifierCache.set(promptId, {
+        requestKey,
+        decision,
+        expiresAt: now + CLASSIFIER_CACHE_TTL_MS,
+      });
+
+      return decision;
     } catch (error) {
       // If the classifier fails for any reason (API error, parsing error, etc.),
       // we log it and return null to allow the composite strategy to proceed.

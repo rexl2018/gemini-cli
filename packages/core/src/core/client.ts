@@ -51,6 +51,9 @@ import type { IdeContext, File } from '../ide/types.js';
 import { handleFallback } from '../fallback/handler.js';
 import type { RoutingContext } from '../routing/routingStrategy.js';
 import { debugLogger } from '../utils/debugLogger.js';
+import { FinishReason } from '@google/genai';
+import { promptIdContext } from '../utils/promptIdContext.js';
+import { AuthType } from './contentGenerator.js';
 
 export function isThinkingSupported(model: string) {
   return model.startsWith('gemini-2.5') || model === DEFAULT_GEMINI_MODEL_AUTO;
@@ -143,6 +146,17 @@ export class GeminiClient {
   async setTools(): Promise<void> {
     const toolRegistry = this.config.getToolRegistry();
     const toolDeclarations = toolRegistry.getFunctionDeclarations();
+    // Debug: log which tools are being registered with the LLM
+    try {
+      const toolNames = (toolDeclarations || [])
+        .map((d: { name?: string }) => d?.name)
+        .filter((n: unknown) => typeof n === 'string' && n.length > 0);
+      debugLogger.log(
+        `[GeminiClient] Tools registered (${toolNames.length}): ${JSON.stringify(toolNames)}`,
+      );
+    } catch {
+      // ignore logging errors
+    }
     const tools: Tool[] = [{ functionDeclarations: toolDeclarations }];
     this.getChat().setTools(tools);
   }
@@ -181,6 +195,17 @@ export class GeminiClient {
 
     const toolRegistry = this.config.getToolRegistry();
     const toolDeclarations = toolRegistry.getFunctionDeclarations();
+    // Debug: log tools at chat start
+    try {
+      const toolNames = (toolDeclarations || [])
+        .map((d: { name?: string }) => d?.name)
+        .filter((n: unknown) => typeof n === 'string' && n.length > 0);
+      debugLogger.log(
+        `[GeminiClient] Starting chat with tools (${toolNames.length}): ${JSON.stringify(toolNames)}`,
+      );
+    } catch {
+      // ignore logging errors
+    }
     const tools: Tool[] = [{ functionDeclarations: toolDeclarations }];
 
     const history = await getInitialChatHistory(this.config, extraHistory);
@@ -500,11 +525,39 @@ export class GeminiClient {
     if (this.currentSequenceModel) {
       modelToUse = this.currentSequenceModel;
     } else {
-      const router = await this.config.getModelRouterService();
-      const decision = await router.route(routingContext);
-      modelToUse = decision.model;
-      // Lock the model for the rest of the sequence
-      this.currentSequenceModel = modelToUse;
+      const cgConfig = this.config.getContentGeneratorConfig();
+      const useRouter = this.config.getUseModelRouter();
+      const isByok = cgConfig?.authType === AuthType.USE_LLM_BYOK;
+      if (!useRouter || isByok) {
+        // Skip router in BYOK or when router disabled; select effective model directly
+        const overrideModel = this.config.getModel();
+        const baseModel =
+          overrideModel === DEFAULT_GEMINI_MODEL_AUTO
+            ? DEFAULT_GEMINI_MODEL
+            : overrideModel;
+        modelToUse = getEffectiveModel(
+          this.config.isInFallbackMode(),
+          baseModel,
+        );
+        debugLogger.log(
+          `[Router] Skipped: useModelRouter=${useRouter}; BYOK=${isByok}. Using model=${modelToUse}`,
+        );
+        this.currentSequenceModel = modelToUse;
+      } else {
+        const router = await this.config.getModelRouterService();
+        // NEW: log router call start
+        debugLogger.log(
+          `[Router] Routing start: historyLen=${routingContext.history.length}, promptId=${prompt_id}`,
+        );
+        const decision = await promptIdContext.run(prompt_id, async () => router.route(routingContext));
+        // NEW: log router decision
+        debugLogger.log(
+          `[Router] Routed model=${decision.model}; source=${decision.metadata.source}; latencyMs=${decision.metadata.latencyMs}`,
+        );
+        modelToUse = decision.model;
+        // Lock the model for the rest of the sequence
+        this.currentSequenceModel = modelToUse;
+      }
     }
 
     const resultStream = turn.run(modelToUse, request, linkedSignal);
@@ -520,6 +573,23 @@ export class GeminiClient {
 
       if (event.type === GeminiEventType.InvalidStream) {
         if (this.config.getContinueOnFailedApiCall()) {
+          // NEW: only auto-continue when last valid model message had non-empty text
+          const curated = this.getChat().getHistory(/*curated=*/ true);
+          const lastValid =
+            curated.length > 0 ? curated[curated.length - 1] : undefined;
+          const canResume =
+            !!lastValid &&
+            lastValid.role === 'model' &&
+            !!lastValid.parts &&
+            lastValid.parts.some(
+              (p) => typeof p.text === 'string' && p.text.trim().length > 0,
+            );
+          if (!canResume) {
+            debugLogger.log(
+              '[InvalidStream] Skipping auto-continue: no valid model text to resume from.',
+            );
+            return turn;
+          }
           if (isInvalidStreamRetry) {
             // We already retried once, so stop here.
             logContentRetryFailure(
@@ -548,15 +618,33 @@ export class GeminiClient {
       }
     }
     if (!turn.pendingToolCalls.length && signal && !signal.aborted) {
+      // NEW: verbose logging of stop/continue state
+      debugLogger.log(
+        `[NextSpeaker] State: pendingToolCalls=${turn.pendingToolCalls.length}, finishReason=${turn.finishReason ?? 'undefined'}, quotaError=${this.config.getQuotaErrorOccurred()}, skipCheck=${this.config.getSkipNextSpeakerCheck()}`,
+      );
+      // NEW: stop when pure text response with final finish reason (not MAX_TOKENS)
+      if (turn.finishReason && turn.finishReason !== FinishReason.MAX_TOKENS) {
+        debugLogger.log(
+          '[NextSpeaker] Stopping: no tool calls and final finishReason; skipping next speaker check.',
+        );
+        return turn;
+      }
       // Check if next speaker check is needed
       if (this.config.getQuotaErrorOccurred()) {
+        debugLogger.log(
+          '[NextSpeaker] Skipping: quota error occurred; not checking next speaker.',
+        );
         return turn;
       }
 
       if (this.config.getSkipNextSpeakerCheck()) {
+        debugLogger.log(
+          '[NextSpeaker] Skipping: config.getSkipNextSpeakerCheck() is true.',
+        );
         return turn;
       }
 
+      debugLogger.log('[NextSpeaker] Running nextSpeakerCheck...');
       const nextSpeakerCheck = await checkNextSpeaker(
         this.getChat(),
         this.config.getBaseLlmClient(),
@@ -570,6 +658,9 @@ export class GeminiClient {
           turn.finishReason?.toString() || '',
           nextSpeakerCheck?.next_speaker || '',
         ),
+      );
+      debugLogger.log(
+        `[NextSpeaker] Decision: next_speaker=${nextSpeakerCheck?.next_speaker || 'unknown'}`,
       );
       if (nextSpeakerCheck?.next_speaker === 'model') {
         const nextRequest = [{ text: 'Please continue.' }];
