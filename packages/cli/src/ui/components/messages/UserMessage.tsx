@@ -8,7 +8,7 @@ import type React from 'react';
 import { Text, Box } from 'ink';
 import { theme } from '../../semantic-colors.js';
 import { SCREEN_READER_USER_PREFIX } from '../../textConstants.js';
-import { isSlashCommand as checkIsSlashCommand } from '../../utils/commandUtils.js';
+import { themeManager } from '../../themes/theme-manager.js';
 
 interface UserMessageProps {
   text: string;
@@ -17,9 +17,11 @@ interface UserMessageProps {
 export const UserMessage: React.FC<UserMessageProps> = ({ text }) => {
   const prefix = '> ';
   const prefixWidth = prefix.length;
-  const isSlashCommand = checkIsSlashCommand(text);
 
-  const textColor = isSlashCommand ? theme.text.accent : theme.text.secondary;
+  // Use a brighter blue across themes for better visibility
+  const brightBlue =
+    themeManager.getActiveTheme().colors.LightBlue || theme.text.link;
+  const textColor = brightBlue; // both normal input and slash commands use bright blue
 
   return (
     <Box flexDirection="row" paddingY={0} marginY={1} alignSelf="flex-start">
