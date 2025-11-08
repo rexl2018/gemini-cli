@@ -26,10 +26,16 @@ function contentText(content: Content): string {
   return text;
 }
 
+const MAX_HISTORY_LINE_LENGTH = 2000;
+
 function formatHistoryLine(index: number, content: Content): string {
   const role = content.role ?? 'model';
   const text = contentText(content);
-  return `${index}. [${role}] ${text}`;
+  const line = `${index}. [${role}] ${text}`;
+  if (line.length <= MAX_HISTORY_LINE_LENGTH) {
+    return line;
+  }
+  return `${line.slice(0, MAX_HISTORY_LINE_LENGTH - 1)}…`;
 }
 
 const listCommand: SlashCommand = {
@@ -154,10 +160,10 @@ const deleteCommand: SlashCommand = {
   },
 };
 
-const deleteSinceCommand: SlashCommand = {
-  name: 'del-since',
+const deleteAfterCommand: SlashCommand = {
+  name: 'del-after',
   description:
-    'Delete entries from index N to the end. Usage: /hist del-since <n>',
+    'Delete entries from index N to the end (inclusive). Usage: /hist del-after <n>',
   kind: CommandKind.BUILT_IN,
   action: async (context, args): Promise<MessageActionReturn> => {
     const nStr = args.trim();
@@ -166,7 +172,7 @@ const deleteSinceCommand: SlashCommand = {
       return {
         type: 'message',
         messageType: 'error',
-        content: 'Invalid number. Usage: /hist del-since <n>',
+        content: 'Invalid number. Usage: /hist del-after <n>',
       };
     }
 
@@ -196,6 +202,120 @@ const deleteSinceCommand: SlashCommand = {
       type: 'message',
       messageType: 'info',
       content: `Conversation history entries from #${n} to #${history.length} deleted.`,
+    };
+  },
+};
+
+const deleteLastCommand: SlashCommand = {
+  name: 'del-last',
+  description: 'Delete the last N entries. Usage: /hist del-last <n>',
+  kind: CommandKind.BUILT_IN,
+  action: async (context, args): Promise<MessageActionReturn> => {
+    const nStr = args.trim();
+    const n = Number.parseInt(nStr, 10);
+    if (!nStr || Number.isNaN(n) || n <= 0) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: 'Invalid number. Usage: /hist del-last <n>',
+      };
+    }
+
+    const client = context.services.config?.getGeminiClient();
+    const chat = await client?.getChat();
+    if (!chat) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: 'No chat client available to modify conversation history.',
+      };
+    }
+
+    const history = chat.getHistory();
+    if (n > history.length) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: `Invalid index. There are only ${history.length} entries in history.`,
+      };
+    }
+
+    const newHistory = history.slice(0, history.length - n);
+    client!.setHistory(newHistory);
+
+    return {
+      type: 'message',
+      messageType: 'info',
+      content: `Last ${n} entries deleted from conversation history.`,
+    };
+  },
+};
+
+const deleteRangeCommand: SlashCommand = {
+  name: 'del-range',
+  description:
+    'Delete entries from index M to N (inclusive). Usage: /hist del-range <m>,<n>',
+  kind: CommandKind.BUILT_IN,
+  action: async (context, args): Promise<MessageActionReturn> => {
+    const parts = args
+      .split(',')
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+
+    if (parts.length !== 2) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: 'Invalid range. Usage: /hist del-range <m>,<n>',
+      };
+    }
+
+    const [startStr, endStr] = parts;
+    const start = Number.parseInt(startStr, 10);
+    const end = Number.parseInt(endStr, 10);
+
+    if (
+      Number.isNaN(start) ||
+      Number.isNaN(end) ||
+      start <= 0 ||
+      end <= 0 ||
+      start > end
+    ) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: 'Invalid range. Usage: /hist del-range <m>,<n>',
+      };
+    }
+
+    const client = context.services.config?.getGeminiClient();
+    const chat = await client?.getChat();
+    if (!chat) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: 'No chat client available to modify conversation history.',
+      };
+    }
+
+    const history = chat.getHistory();
+    if (end > history.length) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: `Invalid index. There are only ${history.length} entries in history.`,
+      };
+    }
+
+    const before = history.slice(0, start - 1);
+    const after = history.slice(end);
+    const newHistory = before.concat(after);
+    client!.setHistory(newHistory);
+
+    return {
+      type: 'message',
+      messageType: 'info',
+      content: `Conversation history entries from #${start} to #${end} deleted.`,
     };
   },
 };
@@ -255,7 +375,9 @@ export const histCommand: SlashCommand = {
     listCommand,
     listnCommand,
     deleteCommand,
-    deleteSinceCommand,
+    deleteAfterCommand,
+    deleteLastCommand,
+    deleteRangeCommand,
     deleteBeforeCommand,
   ],
 };
