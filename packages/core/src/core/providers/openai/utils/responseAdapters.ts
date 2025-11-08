@@ -109,23 +109,45 @@ export function convertFromResponsesApi(
   ];
 
   const usageRaw = data?.['usage'] as Record<string, unknown> | undefined;
-  const usage = usageRaw
-    ? {
-        promptTokenCount: Number(usageRaw['input_token_count'] ?? 0),
-        candidatesTokenCount: Number(usageRaw['output_token_count'] ?? 0),
-        totalTokenCount: Number(
-          usageRaw['total_token_count'] ??
-            ((usageRaw['input_token_count'] as number) ?? 0) +
-              ((usageRaw['output_token_count'] as number) ?? 0),
-        ),
-      }
-    : undefined;
+  const usage = (() => {
+    if (!usageRaw) {
+      return undefined;
+    }
+
+    const prompt = coerceNumber(
+      usageRaw['input_token_count'] ?? usageRaw['input_tokens'] ?? 0,
+    );
+    const candidates = coerceNumber(
+      usageRaw['output_token_count'] ?? usageRaw['output_tokens'] ?? 0,
+    );
+    const totalRaw =
+      usageRaw['total_token_count'] ?? usageRaw['total_tokens'] ?? undefined;
+    const total =
+      totalRaw !== undefined ? coerceNumber(totalRaw) : prompt + candidates;
+
+    return {
+      promptTokenCount: prompt,
+      candidatesTokenCount: candidates,
+      totalTokenCount: total,
+    };
+  })();
 
   const response = new OpenAIGenerateContentResponse(candidates, usage);
   if (typeof data?.['response_id'] === 'string') {
     response.responseId = String(data['response_id']);
   }
   return response;
+}
+
+function coerceNumber(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
 function parseResponsesFunctionCall(item: Record<string, unknown>): Part {
