@@ -1018,7 +1018,7 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     }
 
     const tools = this.convertToolsToOpenAIFormat(req.config?.tools);
-    // Try to infer a preferred tool to force from the user message
+    // Try to infer a preferred tool to help from the user message
     const preferToolName = (() => {
       try {
         const merged = (messages || [])
@@ -1057,11 +1057,11 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
               | { role: 'tool'; tool_call_id: string; content: string }
             >,
           ),
-          // Use Responses API tool format if available; omit temperature/top_p/max_output_tokens to avoid 400
+          // Add explicit max_output_tokens for Responses API (stream single-response path)
+          max_output_tokens: req.config?.maxOutputTokens ?? 8192,
           ...(this.convertToolsToResponsesFormat(req.config?.tools)
             ? { tools: this.convertToolsToResponsesFormat(req.config?.tools) }
             : {}),
-          // Force tool call to help with function calling reliability
           tool_choice: preferToolName
             ? { type: 'function', function: { name: preferToolName } }
             : 'required',
@@ -1278,7 +1278,8 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
             | { role: 'tool'; tool_call_id: string; content: string }
           >,
         ),
-        // Use Responses API tool format if available; omit temperature/top_p/max_output_tokens to avoid 400
+        // Add explicit max_output_tokens for Responses API (stream single-response path)
+        max_output_tokens: req.config?.maxOutputTokens ?? 8192,
         ...(this.convertToolsToResponsesFormat(req.config?.tools)
           ? { tools: this.convertToolsToResponsesFormat(req.config?.tools) }
           : {}),
