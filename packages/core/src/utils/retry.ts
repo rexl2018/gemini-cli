@@ -117,6 +117,11 @@ export async function retryWithBackoff<T>(
     ...cleanOptions,
   };
 
+  // NEW LOG: show retry configuration
+  debugLogger.log(
+    `[Retry] Config: maxAttempts=${maxAttempts}, initialDelayMs=${initialDelayMs}, maxDelayMs=${maxDelayMs}`,
+  );
+
   let attempt = 0;
   let currentDelay = initialDelayMs;
 
@@ -125,6 +130,8 @@ export async function retryWithBackoff<T>(
       throw createAbortError();
     }
     attempt++;
+    // NEW LOG: mark the beginning of an attempt
+    debugLogger.log(`[Retry] Attempt ${attempt}/${maxAttempts} starting...`);
     try {
       const result = await fn();
 
@@ -134,6 +141,10 @@ export async function retryWithBackoff<T>(
       ) {
         const jitter = currentDelay * 0.3 * (Math.random() * 2 - 1);
         const delayWithJitter = Math.max(0, currentDelay + jitter);
+        // NEW LOG: content-based retry delay
+        debugLogger.log(
+          `[Retry] Content retry: sleeping ${Math.round(delayWithJitter)}ms (base=${currentDelay}ms, jitter=${Math.round(jitter)}ms)`,
+        );
         await delay(delayWithJitter, signal);
         currentDelay = Math.min(maxDelayMs, currentDelay * 2);
         continue;
@@ -157,6 +168,9 @@ export async function retryWithBackoff<T>(
             if (fallbackModel) {
               attempt = 0; // Reset attempts and retry with the new model.
               currentDelay = initialDelayMs;
+              debugLogger.log(
+                `[Retry] Terminal quota: switching to fallback model and restarting attempts`,
+              );
               continue;
             }
           } catch (fallbackError) {
@@ -177,6 +191,9 @@ export async function retryWithBackoff<T>(
               if (fallbackModel) {
                 attempt = 0; // Reset attempts and retry with the new model.
                 currentDelay = initialDelayMs;
+                debugLogger.log(
+                  `[Retry] Quota exhausted at attempt ${attempt}: switching to fallback model and restarting attempts`,
+                );
                 continue;
               }
             } catch (fallbackError) {
@@ -187,6 +204,10 @@ export async function retryWithBackoff<T>(
         }
         console.warn(
           `Attempt ${attempt} failed: ${classifiedError.message}. Retrying after ${classifiedError.retryDelayMs}ms...`,
+        );
+        // NEW LOG: quota-based retry delay
+        debugLogger.log(
+          `[Retry] Quota retry: sleeping ${classifiedError.retryDelayMs}ms`,
         );
         await delay(classifiedError.retryDelayMs, signal);
         continue;
@@ -206,11 +227,17 @@ export async function retryWithBackoff<T>(
       // Exponential backoff with jitter for non-quota errors
       const jitter = currentDelay * 0.3 * (Math.random() * 2 - 1);
       const delayWithJitter = Math.max(0, currentDelay + jitter);
+      // NEW LOG: generic backoff delay
+      debugLogger.log(
+        `[Retry] Backoff: sleeping ${Math.round(delayWithJitter)}ms (base=${currentDelay}ms, jitter=${Math.round(jitter)}ms)`,
+      );
       await delay(delayWithJitter, signal);
       currentDelay = Math.min(maxDelayMs, currentDelay * 2);
     }
   }
 
+  // NEW LOG: attempts exhausted
+  debugLogger.log(`[Retry] Attempts exhausted after ${attempt} attempts.`);
   throw new Error('Retry attempts exhausted');
 }
 

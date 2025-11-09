@@ -352,7 +352,7 @@ export class GeminiChat {
     params: SendMessageParameters,
     prompt_id: string,
   ): Promise<AsyncGenerator<GenerateContentResponse>> {
-    const apiCall = () => {
+    const apiCall = async () => {
       const modelToUse = getEffectiveModel(
         this.config.isInFallbackMode(),
         model,
@@ -367,14 +367,32 @@ export class GeminiChat {
         );
       }
 
-      return this.config.getContentGenerator().generateContentStream(
-        {
-          model: modelToUse,
-          contents: requestContents,
-          config: { ...this.generationConfig, ...params.config },
-        },
-        prompt_id,
-      );
+      // Create the original stream
+      const originalStream = await this.config
+        .getContentGenerator()
+        .generateContentStream(
+          {
+            model: modelToUse,
+            contents: requestContents,
+            config: { ...this.generationConfig, ...params.config },
+          },
+          prompt_id,
+        );
+
+      // Prime the stream: consume the first chunk so that any immediate API error (e.g., 429)
+      // is thrown within the retryWithBackoff scope, enabling proper backoff retries.
+      const firstChunk = await originalStream.next();
+
+      async function* stitchedStream(): AsyncGenerator<GenerateContentResponse> {
+        if (!firstChunk.done && firstChunk.value) {
+          yield firstChunk.value;
+        }
+        for await (const chunk of originalStream) {
+          yield chunk;
+        }
+      }
+
+      return stitchedStream();
     };
 
     const onPersistent429Callback = async (

@@ -555,5 +555,13 @@ export class OpenAIChatProvider implements LLMProvider {
       logCurl(curl);
     }
     debugLogger.log(`[OpenAI Debug] Error Response Body: ${errorBody}`);
+    // Ensure downstream retry logic can read a numeric status directly from the error
+    if (typeof status === 'number') {
+      try {
+        (axiosError as unknown as { status?: number }).status = status;
+      } catch {
+        // ignore if assignment fails
+      }
+    }
   }
 }
