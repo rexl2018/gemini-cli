@@ -20,6 +20,8 @@ import { fileExists } from '../utils/fileUtils.js';
 import { Storage } from '../config/storage.js';
 import { GREP_TOOL_NAME } from './tool-names.js';
 import { debugLogger } from '../utils/debugLogger.js';
+import fsPromises from 'node:fs/promises';
+import picomatch from 'picomatch';
 
 const DEFAULT_TOTAL_MAX_MATCHES = 20000;
 
@@ -145,8 +147,8 @@ class GrepToolInvocation extends BaseToolInvocation<
     // Check existence and type after resolving
     try {
       const stats = fs.statSync(targetPath);
-      if (!stats.isDirectory()) {
-        throw new Error(`Path is not a directory: ${targetPath}`);
+      if (!stats.isDirectory() && !stats.isFile()) {
+        throw new Error(`Path is not a file or directory: ${targetPath}`);
       }
     } catch (error: unknown) {
       if (isNodeError(error) && error.code !== 'ENOENT') {
@@ -322,6 +324,42 @@ class GrepToolInvocation extends BaseToolInvocation<
   }): Promise<GrepMatch[]> {
     const { pattern, path: absolutePath, include } = options;
 
+    // If absolutePath is a file, handle single-file search directly
+    try {
+      const stats = fs.statSync(absolutePath);
+      if (stats.isFile()) {
+        if (include) {
+          const isMatch = picomatch(include, {
+            dot: true,
+            nocase: true,
+            basename: true,
+          });
+          if (!isMatch(absolutePath) && !isMatch(path.basename(absolutePath))) {
+            return [];
+          }
+        }
+        const baseDir = path.dirname(absolutePath);
+        const regex = new RegExp(pattern, 'i');
+        const content = await fsPromises.readFile(absolutePath, 'utf8');
+        const lines = content.split(/\r?\n/);
+        const results: GrepMatch[] = [];
+        lines.forEach((line, idx) => {
+          if (regex.test(line)) {
+            results.push({
+              filePath:
+                path.relative(baseDir, absolutePath) ||
+                path.basename(absolutePath),
+              lineNumber: idx + 1,
+              line,
+            });
+          }
+        });
+        return results;
+      }
+    } catch {
+      // If stat fails, fall through to ripgrep directory search
+    }
+
     const rgArgs = [
       '--line-number',
       '--no-heading',
@@ -461,7 +499,7 @@ export class RipGrepTool extends BaseDeclarativeTool<
     super(
       RipGrepTool.Name,
       'SearchText',
-      'Searches for a regular expression pattern within the content of files in a specified directory (or current working directory). Can filter files by a glob pattern. Returns the lines containing matches, along with their file paths and line numbers. Total results limited to 20,000 matches like VSCode.',
+      'Searches for a regular expression pattern within the content of files in a specified directory or a single file (or current working directory). Can filter files by a glob pattern. Returns the lines containing matches, along with their file paths and line numbers. Total results limited to 20,000 matches like VSCode.',
       Kind.Search,
       {
         properties: {
@@ -472,7 +510,7 @@ export class RipGrepTool extends BaseDeclarativeTool<
           },
           dir_path: {
             description:
-              'Optional: The absolute path to the directory to search within. If omitted, searches the current working directory.',
+              'Optional: The absolute path to the directory or a single file to search within. If a file is provided, only that file will be searched. If omitted, searches the current working directory.',
             type: 'string',
           },
           include: {
@@ -516,8 +554,8 @@ export class RipGrepTool extends BaseDeclarativeTool<
     // Check existence and type after resolving
     try {
       const stats = fs.statSync(targetPath);
-      if (!stats.isDirectory()) {
-        throw new Error(`Path is not a directory: ${targetPath}`);
+      if (!stats.isDirectory() && !stats.isFile()) {
+        throw new Error(`Path is not a file or directory: ${targetPath}`);
       }
     } catch (error: unknown) {
       if (isNodeError(error) && error.code !== 'ENOENT') {
