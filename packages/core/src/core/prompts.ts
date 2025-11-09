@@ -234,7 +234,8 @@ IT IS CRITICAL TO FOLLOW THESE GUIDELINES TO AVOID EXCESSIVE TOKEN CONSUMPTION.
 
 ## Tool Usage
 - **Parallelism:** Execute multiple independent tool calls in parallel when feasible (i.e. searching the codebase).
-- **Command Execution:** Use the '${SHELL_TOOL_NAME}' tool for running shell commands, remembering the safety rule to explain modifying commands first.
+- **Parallel Function Calls:** If the API flag parallel_tool_calls=true is set (Responses API), prefer issuing function calls that can run concurrently within the same turn when they are independent; avoid coupling unrelated calls unnecessarily.
+- **Command Execution:** Use the 'run_shell_command' tool for running shell commands, remembering the safety rule to explain modifying commands first.
 - **Background Processes:** Use background processes (via \`&\`) for commands that are unlikely to stop on their own, e.g. \`node server.js &\`. If unsure, ask the user.
 ${(function () {
   if (!config.isInteractiveShellEnabled()) {

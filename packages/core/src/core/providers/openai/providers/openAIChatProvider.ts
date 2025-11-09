@@ -438,6 +438,7 @@ export class OpenAIChatProvider implements LLMProvider {
       input: buildResponsesInputFromMessages(messages),
       max_output_tokens:
         req.config?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      parallel_tool_calls: true,
       ...(convertToolsToResponsesFormat(req.config?.tools)
         ? { tools: convertToolsToResponsesFormat(req.config?.tools) }
         : {}),

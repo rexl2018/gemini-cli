@@ -21,6 +21,7 @@ import type { FileExclusions } from '../utils/ignorePatterns.js';
 import { ToolErrorType } from './tool-error.js';
 import { GREP_TOOL_NAME } from './tool-names.js';
 import { debugLogger } from '../utils/debugLogger.js';
+import picomatch from 'picomatch';
 
 // --- Interfaces ---
 
@@ -96,8 +97,8 @@ class GrepToolInvocation extends BaseToolInvocation<
     // Check existence and type after resolving
     try {
       const stats = fs.statSync(targetPath);
-      if (!stats.isDirectory()) {
-        throw new Error(`Path is not a directory: ${targetPath}`);
+      if (!stats.isDirectory() && !stats.isFile()) {
+        throw new Error(`Path is not a file or directory: ${targetPath}`);
       }
     } catch (error: unknown) {
       if (isNodeError(error) && error.code !== 'ENOENT') {
@@ -341,6 +342,45 @@ class GrepToolInvocation extends BaseToolInvocation<
     const { pattern, path: absolutePath, include } = options;
     let strategyUsed = 'none';
 
+    // Handle single-file search when dir_path points to a file
+    try {
+      const stats = fs.statSync(absolutePath);
+      if (stats.isFile()) {
+        // Respect include pattern if provided
+        if (include) {
+          const isMatch = picomatch(include, {
+            dot: true,
+            nocase: true,
+            basename: true,
+          });
+          if (!isMatch(absolutePath) && !isMatch(path.basename(absolutePath))) {
+            return [];
+          }
+        }
+
+        const regex = new RegExp(pattern, 'i');
+        const fileAbsolutePath = absolutePath;
+        const baseDir = path.dirname(fileAbsolutePath);
+        const allMatches: GrepMatch[] = [];
+        const content = await fsPromises.readFile(fileAbsolutePath, 'utf8');
+        const lines = content.split(/\r?\n/);
+        lines.forEach((line, index) => {
+          if (regex.test(line)) {
+            allMatches.push({
+              filePath:
+                path.relative(baseDir, fileAbsolutePath) ||
+                path.basename(fileAbsolutePath),
+              lineNumber: index + 1,
+              line,
+            });
+          }
+        });
+        return allMatches;
+      }
+    } catch {
+      // If stat fails, proceed with directory search strategies below.
+    }
+
     try {
       // --- Strategy 1: git grep ---
       const isGit = isGitRepository(absolutePath);
@@ -576,7 +616,7 @@ export class GrepTool extends BaseDeclarativeTool<GrepToolParams, ToolResult> {
     super(
       GrepTool.Name,
       'SearchText',
-      'Searches for a regular expression pattern within the content of files in a specified directory (or current working directory). Can filter files by a glob pattern. Returns the lines containing matches, along with their file paths and line numbers.',
+      'Searches for a regular expression pattern within the content of files in a specified directory or a single file (or current working directory). Can filter files by a glob pattern. Returns the lines containing matches, along with their file paths and line numbers.',
       Kind.Search,
       {
         properties: {
@@ -587,7 +627,7 @@ export class GrepTool extends BaseDeclarativeTool<GrepToolParams, ToolResult> {
           },
           dir_path: {
             description:
-              'Optional: The absolute path to the directory to search within. If omitted, searches the current working directory.',
+              'Optional: The absolute path to the directory or a single file to search within. If a file is provided, only that file will be searched. If omitted, searches the current working directory.',
             type: 'string',
           },
           include: {
@@ -631,8 +671,8 @@ export class GrepTool extends BaseDeclarativeTool<GrepToolParams, ToolResult> {
     // Check existence and type after resolving
     try {
       const stats = fs.statSync(targetPath);
-      if (!stats.isDirectory()) {
-        throw new Error(`Path is not a directory: ${targetPath}`);
+      if (!stats.isDirectory() && !stats.isFile()) {
+        throw new Error(`Path is not a file or directory: ${targetPath}`);
       }
     } catch (error: unknown) {
       if (isNodeError(error) && error.code !== 'ENOENT') {
