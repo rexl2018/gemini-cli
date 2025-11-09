@@ -20,6 +20,7 @@ import { loadApiKey } from './apiKeyCredentialStorage.js';
 import type { UserTierId } from '../code_assist/types.js';
 import { LoggingContentGenerator } from './loggingContentGenerator.js';
 import { InstallationManager } from '../utils/installationManager.js';
+import { debugLogger } from '../utils/debugLogger.js';
 import { FakeContentGenerator } from './fakeContentGenerator.js';
 import { RecordingContentGenerator } from './recordingContentGenerator.js';
 
@@ -122,15 +123,21 @@ export async function createContentGenerator(
       return FakeContentGenerator.fromFile(gcConfig.fakeResponses);
     }
     if (config.authType === AuthType.USE_LLM_BYOK) {
+      const endpoint =
+        process.env['LLM_BYOK_ENDPOINT'] || 'http://localhost:11434/v1';
+      const model = process.env['LLM_BYOK_MODEL'] || 'gemma3:latest';
+      const endpointPostfix =
+        process.env['LLM_BYOK_ENDPOINT_POSTFIX'] || '/chat/completions';
+      debugLogger.log(
+        `[BYOK] Initializing OpenAI compatible generator with endpoint=${endpoint}, model=${model}, postfix=${endpointPostfix}`,
+      );
       return new LoggingContentGenerator(
         new OpenAICompatibleContentGenerator({
-          endpoint:
-            process.env['LLM_BYOK_ENDPOINT'] || 'http://localhost:11434/v1',
-          model: process.env['LLM_BYOK_MODEL'] || 'gemma3:latest',
+          endpoint,
+          model,
           apiKey:
             process.env['LLM_BYOK_API_KEY'] || process.env['OPENAI_API_KEY'],
-          endpoint_postfix:
-            process.env['LLM_BYOK_ENDPOINT_POSTFIX'] || '/chat/completions',
+          endpoint_postfix: endpointPostfix,
         }),
         gcConfig,
       );

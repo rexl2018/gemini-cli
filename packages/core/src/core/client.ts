@@ -549,7 +549,9 @@ export class GeminiClient {
         debugLogger.log(
           `[Router] Routing start: historyLen=${routingContext.history.length}, promptId=${prompt_id}`,
         );
-        const decision = await promptIdContext.run(prompt_id, async () => router.route(routingContext));
+        const decision = await promptIdContext.run(prompt_id, async () =>
+          router.route(routingContext),
+        );
         // NEW: log router decision
         debugLogger.log(
           `[Router] Routed model=${decision.model}; source=${decision.metadata.source}; latencyMs=${decision.metadata.latencyMs}`,

@@ -4,76 +4,185 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { WriteStream } from 'node:fs';
+import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { debugLogger } from './debugLogger.js';
+
+const TEST_SESSION_ID = 'test-session-id';
+
+vi.mock('./session.js', () => ({
+  sessionId: TEST_SESSION_ID,
+}));
+
+const mockTempDir = path.join('/tmp', 'gemini-test-home');
+
+const mockWriteStream = {
+  write: vi.fn(),
+  end: vi.fn(),
+  on: vi.fn(),
+};
+
+const mkdirSyncMock = vi.fn();
+const createWriteStreamMock = vi.fn(
+  () => mockWriteStream as unknown as WriteStream,
+);
+
+type LoggerModule = typeof import('./debugLogger.js');
+
+vi.mock('node:os', async (importOriginal) => {
+  const actualOs = await importOriginal<typeof import('node:os')>();
+  return {
+    ...actualOs,
+    homedir: () => mockTempDir,
+  };
+});
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actualFs = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actualFs,
+    mkdirSync: mkdirSyncMock,
+    createWriteStream: createWriteStreamMock,
+  };
+});
 
 describe('DebugLogger', () => {
-  // Spy on all console methods before each test
-  beforeEach(() => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(console, 'debug').mockImplementation(() => {});
+  let loggerModule: LoggerModule;
+  const originalDebug = process.env['DEBUG'];
+
+  const reloadLogger = async () => {
+    vi.resetModules();
+    loggerModule = await import('./debugLogger.js');
+    return loggerModule.debugLogger;
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    process.env['DEBUG'] = originalDebug;
+    await reloadLogger();
   });
 
-  // Restore original console methods after each test
   afterEach(() => {
-    vi.restoreAllMocks();
+    loggerModule.debugLogger.closeStreamForTests();
+    process.env['DEBUG'] = originalDebug;
   });
 
-  it('should call console.log with the correct arguments', () => {
-    const message = 'This is a log message';
-    const data = { key: 'value' };
-    debugLogger.log(message, data);
-    expect(console.log).toHaveBeenCalledWith(message, data);
-    expect(console.log).toHaveBeenCalledTimes(1);
+  describe('when DEBUG is not enabled', () => {
+    beforeEach(async () => {
+      delete process.env['DEBUG'];
+      await reloadLogger();
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(console, 'debug').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('delegates log level methods to console', () => {
+      const logger = loggerModule.debugLogger;
+      const error = new Error('boom');
+
+      logger.log('log message', { foo: 'bar' });
+      logger.warn('warn message');
+      logger.error('error message', error);
+      logger.debug('debug message');
+
+      expect(console.log).toHaveBeenCalledWith('log message', { foo: 'bar' });
+      expect(console.warn).toHaveBeenCalledWith('warn message');
+      expect(console.error).toHaveBeenCalledWith('error message', error);
+      expect(console.debug).toHaveBeenCalledWith('debug message');
+    });
   });
 
-  it('should call console.warn with the correct arguments', () => {
-    const message = 'This is a warning message';
-    const data = [1, 2, 3];
-    debugLogger.warn(message, data);
-    expect(console.warn).toHaveBeenCalledWith(message, data);
-    expect(console.warn).toHaveBeenCalledTimes(1);
-  });
+  describe('when DEBUG is enabled', () => {
+    const expectedDir = path.join(mockTempDir, '.gemini', 'tmp');
+    const expectedFile = path.join(
+      expectedDir,
+      `gemini-debug-${TEST_SESSION_ID}.log`,
+    );
 
-  it('should call console.error with the correct arguments', () => {
-    const message = 'This is an error message';
-    const error = new Error('Something went wrong');
-    debugLogger.error(message, error);
-    expect(console.error).toHaveBeenCalledWith(message, error);
-    expect(console.error).toHaveBeenCalledTimes(1);
-  });
+    beforeEach(async () => {
+      process.env['DEBUG'] = '1';
+      await reloadLogger();
+    });
 
-  it('should call console.debug with the correct arguments', () => {
-    const message = 'This is a debug message';
-    const obj = { a: { b: 'c' } };
-    debugLogger.debug(message, obj);
-    expect(console.debug).toHaveBeenCalledWith(message, obj);
-    expect(console.debug).toHaveBeenCalledTimes(1);
-  });
+    it('initialises the destination directory lazily', () => {
+      loggerModule.debugLogger.log('test');
+      expect(mkdirSyncMock).toHaveBeenCalledWith(expectedDir, {
+        recursive: true,
+      });
+    });
 
-  it('should handle multiple arguments correctly for all methods', () => {
-    debugLogger.log('one', 2, true);
-    expect(console.log).toHaveBeenCalledWith('one', 2, true);
+    it('creates a write stream in append mode', () => {
+      loggerModule.debugLogger.warn('warn');
+      expect(createWriteStreamMock).toHaveBeenCalledWith(expectedFile, {
+        flags: 'a',
+      });
+    });
 
-    debugLogger.warn('one', 2, false);
-    expect(console.warn).toHaveBeenCalledWith('one', 2, false);
+    it('writes formatted log entries with timestamp and level', () => {
+      loggerModule.debugLogger.log('hello %s', 'world');
+      expect(mockWriteStream.write).toHaveBeenCalledTimes(1);
+      const payload = mockWriteStream.write.mock.calls[0][0] as string;
+      expect(payload).toMatch(
+        /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[LOG\] hello world\n/,
+      );
+    });
 
-    debugLogger.error('one', 2, null);
-    expect(console.error).toHaveBeenCalledWith('one', 2, null);
+    it('writes each severity level with the correct label', () => {
+      loggerModule.debugLogger.warn('warning');
+      loggerModule.debugLogger.error('error');
+      loggerModule.debugLogger.debug('debug');
 
-    debugLogger.debug('one', 2, undefined);
-    expect(console.debug).toHaveBeenCalledWith('one', 2, undefined);
-  });
+      expect(mockWriteStream.write).toHaveBeenCalledTimes(3);
+      const [warnLine, errorLine, debugLine] =
+        mockWriteStream.write.mock.calls.map((call) => call[0] as string);
+      expect(warnLine).toContain('[WARN] warning');
+      expect(errorLine).toContain('[ERROR] error');
+      expect(debugLine).toContain('[DEBUG] debug');
+    });
 
-  it('should handle calls with no arguments', () => {
-    debugLogger.log();
-    expect(console.log).toHaveBeenCalledWith();
-    expect(console.log).toHaveBeenCalledTimes(1);
+    it('does not invoke console methods in debug mode', () => {
+      const spies = {
+        log: vi.spyOn(console, 'log').mockImplementation(() => {}),
+        warn: vi.spyOn(console, 'warn').mockImplementation(() => {}),
+        error: vi.spyOn(console, 'error').mockImplementation(() => {}),
+        debug: vi.spyOn(console, 'debug').mockImplementation(() => {}),
+      };
 
-    debugLogger.warn();
-    expect(console.warn).toHaveBeenCalledWith();
-    expect(console.warn).toHaveBeenCalledTimes(1);
+      loggerModule.debugLogger.log('a');
+      loggerModule.debugLogger.warn('b');
+      loggerModule.debugLogger.error('c');
+      loggerModule.debugLogger.debug('d');
+
+      expect(spies.log).not.toHaveBeenCalled();
+      expect(spies.warn).not.toHaveBeenCalled();
+      expect(spies.error).not.toHaveBeenCalled();
+      expect(spies.debug).not.toHaveBeenCalled();
+
+      vi.restoreAllMocks();
+    });
+
+    it('closes the write stream via closeStreamForTests', () => {
+      loggerModule.debugLogger.log('one');
+      loggerModule.debugLogger.closeStreamForTests();
+      expect(mockWriteStream.end).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to console when stream creation fails', async () => {
+      createWriteStreamMock.mockImplementationOnce(() => {
+        throw new Error('failed');
+      });
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      loggerModule.debugLogger.log('fallback');
+
+      expect(consoleSpy).toHaveBeenCalledWith('fallback');
+      expect(mockWriteStream.write).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    });
   });
 });
