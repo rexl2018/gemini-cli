@@ -123,21 +123,58 @@ export async function createContentGenerator(
       return FakeContentGenerator.fromFile(gcConfig.fakeResponses);
     }
     if (config.authType === AuthType.USE_LLM_BYOK) {
-      const endpoint =
-        process.env['LLM_BYOK_ENDPOINT'] || 'http://localhost:11434/v1';
-      const model = process.env['LLM_BYOK_MODEL'] || 'gemma3:latest';
-      const endpointPostfix =
-        process.env['LLM_BYOK_ENDPOINT_POSTFIX'] || '/chat/completions';
+      const providerConfig = gcConfig.getProviderConfig();
+      const endpoint = providerConfig?.llm_endpoint;
+      const resolvedEndpoint = endpoint || process.env['LLM_BYOK_ENDPOINT'];
+      if (!endpoint && process.env['LLM_BYOK_ENDPOINT']) {
+        debugLogger.warn(
+          'Using LLM_BYOK_ENDPOINT environment variable. Please move this value to model.providerConfig.llm_endpoint in settings.json.',
+        );
+      }
+      const model = providerConfig?.model;
+      const resolvedModel = model || process.env['LLM_BYOK_MODEL'];
+      if (!model && process.env['LLM_BYOK_MODEL']) {
+        debugLogger.warn(
+          'Using LLM_BYOK_MODEL environment variable. Provide model.providerConfig.model in settings.json.',
+        );
+      }
+      const endpointPostfix = providerConfig?.llm_endpoint_postfix;
+      const resolvedEndpointPostfix =
+        endpointPostfix || process.env['LLM_BYOK_ENDPOINT_POSTFIX'];
+      if (!endpointPostfix && process.env['LLM_BYOK_ENDPOINT_POSTFIX']) {
+        debugLogger.warn(
+          'Using LLM_BYOK_ENDPOINT_POSTFIX environment variable. Provide model.providerConfig.llm_endpoint_postfix in settings.json.',
+        );
+      }
+
+      const protocol = providerConfig?.llm_protocol || 'responses_api';
+      let apiKey = providerConfig?.llm_apikey;
+      if (!apiKey) {
+        if (process.env['LLM_BYOK_API_KEY']) {
+          debugLogger.warn(
+            'Using LLM_BYOK_API_KEY environment variable. Please move this value to model.providerConfig.llm_apikey in settings.json.',
+          );
+          apiKey = process.env['LLM_BYOK_API_KEY'];
+        } else if (process.env['OPENAI_API_KEY']) {
+          debugLogger.warn(
+            'Using OPENAI_API_KEY environment variable as a fallback. Provide model.providerConfig.llm_apikey in settings.json to avoid this warning.',
+          );
+          apiKey = process.env['OPENAI_API_KEY'];
+        }
+      }
+      const effectiveEndpoint = resolvedEndpoint || 'http://localhost:11434/v1';
+      const effectiveModel = resolvedModel || 'gemma3:latest';
+      const effectivePostfix = resolvedEndpointPostfix || '/chat/completions';
       debugLogger.log(
-        `[BYOK] Initializing OpenAI compatible generator with endpoint=${endpoint}, model=${model}, postfix=${endpointPostfix}`,
+        `[BYOK] Initializing OpenAI compatible generator with endpoint=${effectiveEndpoint}, model=${effectiveModel}, postfix=${effectivePostfix}, protocol=${protocol}`,
       );
       return new LoggingContentGenerator(
         new OpenAICompatibleContentGenerator({
-          endpoint,
-          model,
-          apiKey:
-            process.env['LLM_BYOK_API_KEY'] || process.env['OPENAI_API_KEY'],
-          endpoint_postfix: endpointPostfix,
+          endpoint: effectiveEndpoint,
+          model: effectiveModel,
+          apiKey,
+          endpoint_postfix: effectivePostfix,
+          protocol,
         }),
         gcConfig,
       );

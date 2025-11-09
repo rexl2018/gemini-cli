@@ -12,6 +12,7 @@ import type { OutputFormat } from '@google/gemini-cli-core';
 import { extensionsCommand } from '../commands/extensions.js';
 import {
   Config,
+  DEFAULT_PROVIDER_CONFIG,
   setGeminiMdFilename as setServerGeminiMdFilename,
   getCurrentGeminiMdFilename,
   ApprovalMode,
@@ -582,6 +583,12 @@ export async function loadCliConfig(
     fileDiscoveryService: fileService,
     bugCommand: settings.advanced?.bugCommand,
     model: resolvedModel,
+    providerConfig: settings.model?.providerConfig
+      ? {
+          ...DEFAULT_PROVIDER_CONFIG,
+          ...settings.model.providerConfig,
+        }
+      : undefined,
     maxSessionTurns: settings.model?.maxSessionTurns ?? -1,
     experimentalZedIntegration: argv.experimentalAcp || false,
     listExtensions: argv.listExtensions || false,
@@ -611,8 +618,20 @@ export async function loadCliConfig(
     },
     useModelRouter,
     enableMessageBusIntegration,
-    codebaseInvestigatorSettings:
-      settings.experimental?.codebaseInvestigatorSettings,
+    codebaseInvestigatorSettings: settings.experimental
+      ?.codebaseInvestigatorSettings
+      ? {
+          ...settings.experimental.codebaseInvestigatorSettings,
+          providerConfig: settings.experimental.codebaseInvestigatorSettings
+            .providerConfig
+            ? {
+                ...DEFAULT_PROVIDER_CONFIG,
+                ...settings.experimental.codebaseInvestigatorSettings
+                  .providerConfig,
+              }
+            : undefined,
+        }
+      : undefined,
     fakeResponses: argv.fakeResponses,
     recordResponses: argv.recordResponses,
     retryFetchErrors: settings.general?.retryFetchErrors ?? false,

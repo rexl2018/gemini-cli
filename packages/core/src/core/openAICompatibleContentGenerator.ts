@@ -22,6 +22,7 @@ export interface OpenAIConfig {
   model: string;
   apiKey?: string;
   endpoint_postfix?: string;
+  protocol?: 'responses_api' | 'chat_completion';
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -38,10 +39,10 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
       endpointPostfix: config.endpoint_postfix,
       apiKey: config.apiKey,
       timeoutMs: DEFAULT_TIMEOUT_MS,
-      useResponsesApi: this.shouldUseResponsesApi(),
+      useResponsesApi: this.shouldUseResponsesApi(config.protocol),
     };
     debugLogger.log(
-      `[BYOK] OpenAI provider created with endpoint=${config.endpoint}, postfix=${config.endpoint_postfix}, model=${config.model}`,
+      `[BYOK] OpenAI provider created with endpoint=${config.endpoint}, postfix=${config.endpoint_postfix}, model=${config.model}, protocol=${config.protocol ?? 'responses_api'}`,
     );
     this.provider = createOpenAIProvider(this.providerConfig);
   }
@@ -108,15 +109,7 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
   }
 
   private refreshProviderIfNeeded(): void {
-    const flag = this.shouldUseResponsesApi();
-    if (flag === this.providerConfig.useResponsesApi) {
-      return;
-    }
-    this.providerConfig = {
-      ...this.providerConfig,
-      useResponsesApi: flag,
-    };
-    this.provider = createOpenAIProvider(this.providerConfig);
+    // Protocol is defined at construction time; no dynamic refresh required.
   }
 
   countTokens(request: CountTokensParameters): Promise<CountTokensResponse> {
@@ -127,7 +120,12 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     return this.provider.embedContent(request);
   }
 
-  private shouldUseResponsesApi(): boolean {
+  private shouldUseResponsesApi(
+    protocol: 'responses_api' | 'chat_completion' | undefined,
+  ): boolean {
+    if (protocol) {
+      return protocol === 'responses_api';
+    }
     const v = process.env['LLM_BYOK_RESPONSE_API'];
     return !!v && v !== '0';
   }

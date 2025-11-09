@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Config } from '../config/config.js';
+import { DEFAULT_PROVIDER_CONFIG, type Config } from '../config/config.js';
 import type { AgentDefinition } from './types.js';
 import { CodebaseInvestigatorAgent } from './codebase-investigator.js';
 import { type z } from 'zod';
@@ -38,11 +38,14 @@ export class AgentRegistry {
 
     // Only register the agent if it's enabled in the settings.
     if (investigatorSettings?.enabled) {
+      const providerConfig =
+        investigatorSettings.providerConfig ?? DEFAULT_PROVIDER_CONFIG;
       const agentDef = {
         ...CodebaseInvestigatorAgent,
         modelConfig: {
           ...CodebaseInvestigatorAgent.modelConfig,
           model:
+            providerConfig?.model ??
             investigatorSettings.model ??
             CodebaseInvestigatorAgent.modelConfig.model,
           thinkingBudget:
@@ -58,6 +61,7 @@ export class AgentRegistry {
             investigatorSettings.maxNumTurns ??
             CodebaseInvestigatorAgent.runConfig.max_turns,
         },
+        providerConfig,
       };
       this.registerAgent(agentDef);
     }

@@ -11,22 +11,42 @@ import { validateAuthMethod } from './config/auth.js';
 import { type LoadedSettings } from './config/settings.js';
 import { handleError } from './utils/errors.js';
 
-function getAuthTypeFromEnv(): AuthType | undefined {
-  // Detect BYOK env configuration
+function detectByokFromSettings(settings: LoadedSettings): boolean {
+  const providerConfig = settings.merged.model?.providerConfig;
+  if (providerConfig?.llm_provider === 'llm_byok_openai') {
+    return true;
+  }
+  const investigatorProvider =
+    settings.merged.experimental?.codebaseInvestigatorSettings?.providerConfig;
+  return investigatorProvider?.llm_provider === 'llm_byok_openai';
+}
+
+function getAuthType(
+  configuredAuthType: AuthType | undefined,
+  settings: LoadedSettings,
+): { authType: AuthType | undefined; usedEnvFallback: boolean } {
+  if (configuredAuthType) {
+    return { authType: configuredAuthType, usedEnvFallback: false };
+  }
+
+  if (detectByokFromSettings(settings)) {
+    return { authType: AuthType.USE_LLM_BYOK, usedEnvFallback: false };
+  }
+
   if (process.env['LLM_BYOK_API_KEY'] || process.env['LLM_BYOK_ENDPOINT']) {
-    return AuthType.USE_LLM_BYOK;
+    return { authType: AuthType.USE_LLM_BYOK, usedEnvFallback: true };
   }
 
   if (process.env['GOOGLE_GENAI_USE_GCA'] === 'true') {
-    return AuthType.LOGIN_WITH_GOOGLE;
+    return { authType: AuthType.LOGIN_WITH_GOOGLE, usedEnvFallback: true };
   }
   if (process.env['GOOGLE_GENAI_USE_VERTEXAI'] === 'true') {
-    return AuthType.USE_VERTEX_AI;
+    return { authType: AuthType.USE_VERTEX_AI, usedEnvFallback: true };
   }
   if (process.env['GEMINI_API_KEY']) {
-    return AuthType.USE_GEMINI;
+    return { authType: AuthType.USE_GEMINI, usedEnvFallback: true };
   }
-  return undefined;
+  return { authType: undefined, usedEnvFallback: false };
 }
 
 export async function validateNonInteractiveAuth(
@@ -36,7 +56,16 @@ export async function validateNonInteractiveAuth(
   settings: LoadedSettings,
 ) {
   try {
-    const effectiveAuthType = configuredAuthType || getAuthTypeFromEnv();
+    const { authType: effectiveAuthType, usedEnvFallback } = getAuthType(
+      configuredAuthType,
+      settings,
+    );
+
+    if (usedEnvFallback) {
+      debugLogger.warn(
+        'Detected deprecated BYOK environment variables. Please migrate to model.providerConfig settings.json entries.',
+      );
+    }
 
     const enforcedType = settings.merged.security?.auth?.enforcedType;
     if (enforcedType && effectiveAuthType !== enforcedType) {
@@ -47,7 +76,7 @@ export async function validateNonInteractiveAuth(
     }
 
     if (!effectiveAuthType) {
-      const message = `Please set an Auth method in your ${USER_SETTINGS_PATH} or specify one of the following environment variables before running: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA, LLM_BYOK_API_KEY/OPENAI_API_KEY (with LLM_BYOK_ENDPOINT)`;
+      const message = `Please set an Auth method in your ${USER_SETTINGS_PATH} (e.g. security.auth.selectedType or model.providerConfig.llm_provider) or specify one of the following environment variables before running: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA, LLM_BYOK_API_KEY/OPENAI_API_KEY (with LLM_BYOK_ENDPOINT)`;
       throw new Error(message);
     }
 

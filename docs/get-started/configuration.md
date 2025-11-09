@@ -275,6 +275,37 @@ their corresponding top-level category object in your `settings.json` file.
   - **Description:** The Gemini model to use for conversations.
   - **Default:** `undefined`
 
+- **`model.providerConfig.llm_provider`** (enum):
+  - **Description:** Choose between Gemini-managed models and BYOK
+    OpenAI-compatible endpoints.
+  - **Default:** `"llm_gemini"`
+  - **Values:** `"llm_gemini"`, `"llm_byok_openai"`
+
+- **`model.providerConfig.llm_protocol`** (enum):
+  - **Description:** Select the protocol to use when connecting to the
+    OpenAI-compatible endpoint.
+  - **Default:** `"responses_api"`
+  - **Values:** `"responses_api"`, `"chat_completion"`
+
+- **`model.providerConfig.llm_endpoint`** (string):
+  - **Description:** Base URL for the BYOK OpenAI-compatible endpoint.
+  - **Default:** `""`
+
+- **`model.providerConfig.llm_endpoint_postfix`** (string):
+  - **Description:** Additional path appended to the base endpoint when making
+    requests.
+  - **Default:** `""`
+
+- **`model.providerConfig.llm_apikey`** (string):
+  - **Description:** API key to use when calling the BYOK OpenAI-compatible
+    endpoint.
+  - **Default:** `""`
+
+- **`model.providerConfig.model`** (string):
+  - **Description:** Default model identifier to use when the BYOK provider is
+    selected.
+  - **Default:** `"gemini-2.5-pro"`
+
 - **`model.maxSessionTurns`** (number):
   - **Description:** Maximum number of user/model/tool turns to keep in a
     session. -1 means unlimited.
@@ -573,6 +604,48 @@ their corresponding top-level category object in your `settings.json` file.
 
 - **`experimental.codebaseInvestigatorSettings.model`** (string):
   - **Description:** The model to use for the Codebase Investigator agent.
+  - **Default:** `"gemini-2.5-pro"`
+  - **Requires restart:** Yes
+
+- **`experimental.codebaseInvestigatorSettings.providerConfig.llm_provider`**
+  (enum):
+  - **Description:** Choose between Gemini-managed models and BYOK
+    OpenAI-compatible endpoints.
+  - **Default:** `"llm_gemini"`
+  - **Values:** `"llm_gemini"`, `"llm_byok_openai"`
+  - **Requires restart:** Yes
+
+- **`experimental.codebaseInvestigatorSettings.providerConfig.llm_protocol`**
+  (enum):
+  - **Description:** Select the protocol to use when connecting to the
+    OpenAI-compatible endpoint.
+  - **Default:** `"responses_api"`
+  - **Values:** `"responses_api"`, `"chat_completion"`
+  - **Requires restart:** Yes
+
+- **`experimental.codebaseInvestigatorSettings.providerConfig.llm_endpoint`**
+  (string):
+  - **Description:** Base URL for the BYOK OpenAI-compatible endpoint.
+  - **Default:** `""`
+  - **Requires restart:** Yes
+
+- **`experimental.codebaseInvestigatorSettings.providerConfig.llm_endpoint_postfix`**
+  (string):
+  - **Description:** Additional path appended to the base endpoint when making
+    requests.
+  - **Default:** `""`
+  - **Requires restart:** Yes
+
+- **`experimental.codebaseInvestigatorSettings.providerConfig.llm_apikey`**
+  (string):
+  - **Description:** API key to use when calling the BYOK OpenAI-compatible
+    endpoint.
+  - **Default:** `""`
+  - **Requires restart:** Yes
+
+- **`experimental.codebaseInvestigatorSettings.providerConfig.model`** (string):
+  - **Description:** Default model identifier to use when the BYOK provider is
+    selected.
   - **Default:** `"gemini-2.5-pro"`
   - **Requires restart:** Yes
 

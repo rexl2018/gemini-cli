@@ -379,6 +379,67 @@
           "markdownDescription": "The Gemini model to use for conversations.\n\n- Category: `Model`\n- Requires restart: `no`",
           "type": "string"
         },
+        "providerConfig": {
+          "title": "Provider Configuration",
+          "description": "Advanced configuration for selecting Gemini or OpenAI-compatible endpoints.",
+          "markdownDescription": "Advanced configuration for selecting Gemini or OpenAI-compatible endpoints.\n\n- Category: `Model`\n- Requires restart: `no`\n- Default: `{\"llm_provider\":\"llm_gemini\",\"llm_protocol\":\"responses_api\",\"llm_endpoint\":\"\",\"llm_endpoint_postfix\":\"\",\"llm_apikey\":\"\",\"model\":\"gemini-2.5-pro\"}`",
+          "default": {
+            "llm_provider": "llm_gemini",
+            "llm_protocol": "responses_api",
+            "llm_endpoint": "",
+            "llm_endpoint_postfix": "",
+            "llm_apikey": "",
+            "model": "gemini-2.5-pro"
+          },
+          "type": "object",
+          "properties": {
+            "llm_provider": {
+              "title": "LLM Provider",
+              "description": "Choose between Gemini-managed models and BYOK OpenAI-compatible endpoints.",
+              "markdownDescription": "Choose between Gemini-managed models and BYOK OpenAI-compatible endpoints.\n\n- Category: `Model`\n- Requires restart: `no`\n- Default: `llm_gemini`",
+              "default": "llm_gemini",
+              "type": "string",
+              "enum": ["llm_gemini", "llm_byok_openai"]
+            },
+            "llm_protocol": {
+              "title": "LLM Protocol",
+              "description": "Select the protocol to use when connecting to the OpenAI-compatible endpoint.",
+              "markdownDescription": "Select the protocol to use when connecting to the OpenAI-compatible endpoint.\n\n- Category: `Model`\n- Requires restart: `no`\n- Default: `responses_api`",
+              "default": "responses_api",
+              "type": "string",
+              "enum": ["responses_api", "chat_completion"]
+            },
+            "llm_endpoint": {
+              "title": "Endpoint",
+              "description": "Base URL for the BYOK OpenAI-compatible endpoint.",
+              "markdownDescription": "Base URL for the BYOK OpenAI-compatible endpoint.\n\n- Category: `Model`\n- Requires restart: `no`\n- Default: ``",
+              "default": "",
+              "type": "string"
+            },
+            "llm_endpoint_postfix": {
+              "title": "Endpoint Postfix",
+              "description": "Additional path appended to the base endpoint when making requests.",
+              "markdownDescription": "Additional path appended to the base endpoint when making requests.\n\n- Category: `Model`\n- Requires restart: `no`\n- Default: ``",
+              "default": "",
+              "type": "string"
+            },
+            "llm_apikey": {
+              "title": "API Key",
+              "description": "API key to use when calling the BYOK OpenAI-compatible endpoint.",
+              "markdownDescription": "API key to use when calling the BYOK OpenAI-compatible endpoint.\n\n- Category: `Model`\n- Requires restart: `no`\n- Default: ``",
+              "default": "",
+              "type": "string"
+            },
+            "model": {
+              "title": "Default Model",
+              "description": "Default model identifier to use when the BYOK provider is selected.",
+              "markdownDescription": "Default model identifier to use when the BYOK provider is selected.\n\n- Category: `Model`\n- Requires restart: `no`\n- Default: `gemini-2.5-pro`",
+              "default": "gemini-2.5-pro",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
         "maxSessionTurns": {
           "title": "Max Session Turns",
           "description": "Maximum number of user/model/tool turns to keep in a session. -1 means unlimited.",
@@ -1145,6 +1206,67 @@
               "markdownDescription": "The model to use for the Codebase Investigator agent.\n\n- Category: `Experimental`\n- Requires restart: `yes`\n- Default: `gemini-2.5-pro`",
               "default": "gemini-2.5-pro",
               "type": "string"
+            },
+            "providerConfig": {
+              "title": "Provider Configuration",
+              "description": "Advanced provider settings for the Codebase Investigator agent.",
+              "markdownDescription": "Advanced provider settings for the Codebase Investigator agent.\n\n- Category: `Experimental`\n- Requires restart: `yes`\n- Default: `{\"llm_provider\":\"llm_gemini\",\"llm_protocol\":\"responses_api\",\"llm_endpoint\":\"\",\"llm_endpoint_postfix\":\"\",\"llm_apikey\":\"\",\"model\":\"gemini-2.5-pro\"}`",
+              "default": {
+                "llm_provider": "llm_gemini",
+                "llm_protocol": "responses_api",
+                "llm_endpoint": "",
+                "llm_endpoint_postfix": "",
+                "llm_apikey": "",
+                "model": "gemini-2.5-pro"
+              },
+              "type": "object",
+              "properties": {
+                "llm_provider": {
+                  "title": "LLM Provider",
+                  "description": "Choose between Gemini-managed models and BYOK OpenAI-compatible endpoints.",
+                  "markdownDescription": "Choose between Gemini-managed models and BYOK OpenAI-compatible endpoints.\n\n- Category: `Experimental`\n- Requires restart: `yes`\n- Default: `llm_gemini`",
+                  "default": "llm_gemini",
+                  "type": "string",
+                  "enum": ["llm_gemini", "llm_byok_openai"]
+                },
+                "llm_protocol": {
+                  "title": "LLM Protocol",
+                  "description": "Select the protocol to use when connecting to the OpenAI-compatible endpoint.",
+                  "markdownDescription": "Select the protocol to use when connecting to the OpenAI-compatible endpoint.\n\n- Category: `Experimental`\n- Requires restart: `yes`\n- Default: `responses_api`",
+                  "default": "responses_api",
+                  "type": "string",
+                  "enum": ["responses_api", "chat_completion"]
+                },
+                "llm_endpoint": {
+                  "title": "Endpoint",
+                  "description": "Base URL for the BYOK OpenAI-compatible endpoint.",
+                  "markdownDescription": "Base URL for the BYOK OpenAI-compatible endpoint.\n\n- Category: `Experimental`\n- Requires restart: `yes`\n- Default: ``",
+                  "default": "",
+                  "type": "string"
+                },
+                "llm_endpoint_postfix": {
+                  "title": "Endpoint Postfix",
+                  "description": "Additional path appended to the base endpoint when making requests.",
+                  "markdownDescription": "Additional path appended to the base endpoint when making requests.\n\n- Category: `Experimental`\n- Requires restart: `yes`\n- Default: ``",
+                  "default": "",
+                  "type": "string"
+                },
+                "llm_apikey": {
+                  "title": "API Key",
+                  "description": "API key to use when calling the BYOK OpenAI-compatible endpoint.",
+                  "markdownDescription": "API key to use when calling the BYOK OpenAI-compatible endpoint.\n\n- Category: `Experimental`\n- Requires restart: `yes`\n- Default: ``",
+                  "default": "",
+                  "type": "string"
+                },
+                "model": {
+                  "title": "Default Model",
+                  "description": "Default model identifier to use when the BYOK provider is selected.",
+                  "markdownDescription": "Default model identifier to use when the BYOK provider is selected.\n\n- Category: `Experimental`\n- Requires restart: `yes`\n- Default: `gemini-2.5-pro`",
+                  "default": "gemini-2.5-pro",
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

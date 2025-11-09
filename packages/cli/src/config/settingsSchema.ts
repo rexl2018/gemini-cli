@@ -43,6 +43,25 @@ export type SettingsValue =
   | object
   | undefined;
 
+const LLM_PROVIDER_OPTIONS = [
+  { value: 'llm_gemini', label: 'Gemini (default)' },
+  { value: 'llm_byok_openai', label: 'OpenAI-compatible (BYOK)' },
+] as const;
+
+const LLM_PROTOCOL_OPTIONS = [
+  { value: 'responses_api', label: 'Responses API' },
+  { value: 'chat_completion', label: 'Chat Completions' },
+] as const;
+
+const DEFAULT_LLM_PROVIDER_CONFIG = {
+  llm_provider: 'llm_gemini',
+  llm_protocol: 'responses_api',
+  llm_endpoint: '',
+  llm_endpoint_postfix: '',
+  llm_apikey: '',
+  model: DEFAULT_GEMINI_MODEL,
+} as const;
+
 /**
  * Setting datatypes that "toggle" through a fixed list of options
  * (e.g. an enum or true/false) rather than allowing for free form input
@@ -627,6 +646,79 @@ const SETTINGS_SCHEMA = {
         default: undefined as string | undefined,
         description: 'The Gemini model to use for conversations.',
         showInDialog: false,
+      },
+      providerConfig: {
+        type: 'object',
+        label: 'Provider Configuration',
+        category: 'Model',
+        requiresRestart: false,
+        default: DEFAULT_LLM_PROVIDER_CONFIG,
+        description:
+          'Advanced configuration for selecting Gemini or OpenAI-compatible endpoints.',
+        showInDialog: false,
+        properties: {
+          llm_provider: {
+            type: 'enum',
+            label: 'LLM Provider',
+            category: 'Model',
+            requiresRestart: false,
+            default: DEFAULT_LLM_PROVIDER_CONFIG.llm_provider,
+            description:
+              'Choose between Gemini-managed models and BYOK OpenAI-compatible endpoints.',
+            showInDialog: false,
+            options: LLM_PROVIDER_OPTIONS,
+          },
+          llm_protocol: {
+            type: 'enum',
+            label: 'LLM Protocol',
+            category: 'Model',
+            requiresRestart: false,
+            default: DEFAULT_LLM_PROVIDER_CONFIG.llm_protocol,
+            description:
+              'Select the protocol to use when connecting to the OpenAI-compatible endpoint.',
+            showInDialog: false,
+            options: LLM_PROTOCOL_OPTIONS,
+          },
+          llm_endpoint: {
+            type: 'string',
+            label: 'Endpoint',
+            category: 'Model',
+            requiresRestart: false,
+            default: DEFAULT_LLM_PROVIDER_CONFIG.llm_endpoint,
+            description: 'Base URL for the BYOK OpenAI-compatible endpoint.',
+            showInDialog: false,
+          },
+          llm_endpoint_postfix: {
+            type: 'string',
+            label: 'Endpoint Postfix',
+            category: 'Model',
+            requiresRestart: false,
+            default: DEFAULT_LLM_PROVIDER_CONFIG.llm_endpoint_postfix,
+            description:
+              'Additional path appended to the base endpoint when making requests.',
+            showInDialog: false,
+          },
+          llm_apikey: {
+            type: 'string',
+            label: 'API Key',
+            category: 'Model',
+            requiresRestart: false,
+            default: DEFAULT_LLM_PROVIDER_CONFIG.llm_apikey,
+            description:
+              'API key to use when calling the BYOK OpenAI-compatible endpoint.',
+            showInDialog: false,
+          },
+          model: {
+            type: 'string',
+            label: 'Default Model',
+            category: 'Model',
+            requiresRestart: false,
+            default: DEFAULT_LLM_PROVIDER_CONFIG.model,
+            description:
+              'Default model identifier to use when the BYOK provider is selected.',
+            showInDialog: false,
+          },
+        },
       },
       maxSessionTurns: {
         type: 'number',
@@ -1310,6 +1402,80 @@ const SETTINGS_SCHEMA = {
             description:
               'The model to use for the Codebase Investigator agent.',
             showInDialog: false,
+          },
+          providerConfig: {
+            type: 'object',
+            label: 'Provider Configuration',
+            category: 'Experimental',
+            requiresRestart: true,
+            default: DEFAULT_LLM_PROVIDER_CONFIG,
+            description:
+              'Advanced provider settings for the Codebase Investigator agent.',
+            showInDialog: false,
+            properties: {
+              llm_provider: {
+                type: 'enum',
+                label: 'LLM Provider',
+                category: 'Experimental',
+                requiresRestart: true,
+                default: DEFAULT_LLM_PROVIDER_CONFIG.llm_provider,
+                description:
+                  'Choose between Gemini-managed models and BYOK OpenAI-compatible endpoints.',
+                showInDialog: false,
+                options: LLM_PROVIDER_OPTIONS,
+              },
+              llm_protocol: {
+                type: 'enum',
+                label: 'LLM Protocol',
+                category: 'Experimental',
+                requiresRestart: true,
+                default: DEFAULT_LLM_PROVIDER_CONFIG.llm_protocol,
+                description:
+                  'Select the protocol to use when connecting to the OpenAI-compatible endpoint.',
+                showInDialog: false,
+                options: LLM_PROTOCOL_OPTIONS,
+              },
+              llm_endpoint: {
+                type: 'string',
+                label: 'Endpoint',
+                category: 'Experimental',
+                requiresRestart: true,
+                default: DEFAULT_LLM_PROVIDER_CONFIG.llm_endpoint,
+                description:
+                  'Base URL for the BYOK OpenAI-compatible endpoint.',
+                showInDialog: false,
+              },
+              llm_endpoint_postfix: {
+                type: 'string',
+                label: 'Endpoint Postfix',
+                category: 'Experimental',
+                requiresRestart: true,
+                default: DEFAULT_LLM_PROVIDER_CONFIG.llm_endpoint_postfix,
+                description:
+                  'Additional path appended to the base endpoint when making requests.',
+                showInDialog: false,
+              },
+              llm_apikey: {
+                type: 'string',
+                label: 'API Key',
+                category: 'Experimental',
+                requiresRestart: true,
+                default: DEFAULT_LLM_PROVIDER_CONFIG.llm_apikey,
+                description:
+                  'API key to use when calling the BYOK OpenAI-compatible endpoint.',
+                showInDialog: false,
+              },
+              model: {
+                type: 'string',
+                label: 'Default Model',
+                category: 'Experimental',
+                requiresRestart: true,
+                default: DEFAULT_LLM_PROVIDER_CONFIG.model,
+                description:
+                  'Default model identifier to use when the BYOK provider is selected.',
+                showInDialog: false,
+              },
+            },
           },
         },
       },

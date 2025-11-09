@@ -115,12 +115,31 @@ export interface OutputSettings {
   format?: OutputFormat;
 }
 
+export interface LlmProviderConfig {
+  llm_provider: 'llm_gemini' | 'llm_byok_openai';
+  llm_protocol: 'responses_api' | 'chat_completion';
+  llm_endpoint: string;
+  llm_endpoint_postfix: string;
+  llm_apikey: string;
+  model: string;
+}
+
+export const DEFAULT_PROVIDER_CONFIG: LlmProviderConfig = {
+  llm_provider: 'llm_gemini',
+  llm_protocol: 'responses_api',
+  llm_endpoint: '',
+  llm_endpoint_postfix: '',
+  llm_apikey: '',
+  model: DEFAULT_GEMINI_MODEL,
+};
+
 export interface CodebaseInvestigatorSettings {
   enabled?: boolean;
   maxNumTurns?: number;
   maxTimeMinutes?: number;
   thinkingBudget?: number;
   model?: string;
+  providerConfig?: LlmProviderConfig;
 }
 
 /**
@@ -253,6 +272,7 @@ export interface ConfigParameters {
   includeDirectories?: string[];
   bugCommand?: BugCommandSettings;
   model: string;
+  providerConfig?: LlmProviderConfig;
   maxSessionTurns?: number;
   experimentalZedIntegration?: boolean;
   listExtensions?: boolean;
@@ -354,6 +374,7 @@ export class Config {
   private readonly cwd: string;
   private readonly bugCommand: BugCommandSettings | undefined;
   private model: string;
+  private providerConfig: LlmProviderConfig | undefined;
   private readonly noBrowser: boolean;
   private readonly folderTrust: boolean;
   private ideMode: boolean;
@@ -470,6 +491,10 @@ export class Config {
     this.fileDiscoveryService = params.fileDiscoveryService ?? null;
     this.bugCommand = params.bugCommand;
     this.model = params.model;
+    this.providerConfig = params.providerConfig ?? {
+      ...DEFAULT_PROVIDER_CONFIG,
+      model: this.model,
+    };
     this.maxSessionTurns = params.maxSessionTurns ?? -1;
     this.experimentalZedIntegration =
       params.experimentalZedIntegration ?? false;
@@ -527,6 +552,9 @@ export class Config {
         params.codebaseInvestigatorSettings?.thinkingBudget ??
         DEFAULT_THINKING_MODE,
       model: params.codebaseInvestigatorSettings?.model ?? DEFAULT_GEMINI_MODEL,
+      providerConfig:
+        params.codebaseInvestigatorSettings?.providerConfig ??
+        DEFAULT_PROVIDER_CONFIG,
     };
     this.continueOnFailedApiCall = params.continueOnFailedApiCall ?? true;
     this.enableShellOutputEfficiency =
@@ -652,6 +680,9 @@ export class Config {
       this,
       authMethod,
     );
+    if (authMethod !== AuthType.USE_LLM_BYOK) {
+      this.providerConfig = { ...DEFAULT_PROVIDER_CONFIG };
+    }
     this.contentGenerator = await createContentGenerator(
       newContentGeneratorConfig,
       this,
@@ -727,6 +758,10 @@ export class Config {
 
   getModel(): string {
     return this.model;
+  }
+
+  getProviderConfig(): LlmProviderConfig | undefined {
+    return this.providerConfig;
   }
 
   setModel(newModel: string): void {
