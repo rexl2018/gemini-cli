@@ -324,6 +324,16 @@ class GrepToolInvocation extends BaseToolInvocation<
   }): Promise<GrepMatch[]> {
     const { pattern, path: absolutePath, include } = options;
 
+    // Decide whether to treat the pattern as a regex or a literal string
+    let useFixedStrings = false;
+    try {
+      // Try compiling the regex; if it fails, fallback to literal matching
+      // We only test validity here; actual matching will recreate with flags as needed
+      new RegExp(pattern);
+    } catch {
+      useFixedStrings = true;
+    }
+
     // If absolutePath is a file, handle single-file search directly
     try {
       const stats = fs.statSync(absolutePath);
@@ -339,12 +349,18 @@ class GrepToolInvocation extends BaseToolInvocation<
           }
         }
         const baseDir = path.dirname(absolutePath);
-        const regex = new RegExp(pattern, 'i');
         const content = await fsPromises.readFile(absolutePath, 'utf8');
         const lines = content.split(/\r?\n/);
         const results: GrepMatch[] = [];
         lines.forEach((line, idx) => {
-          if (regex.test(line)) {
+          let matched = false;
+          if (useFixedStrings) {
+            matched = line.toLowerCase().includes(pattern.toLowerCase());
+          } else {
+            const regex = new RegExp(pattern, 'i');
+            matched = regex.test(line);
+          }
+          if (matched) {
             results.push({
               filePath:
                 path.relative(baseDir, absolutePath) ||
@@ -365,8 +381,6 @@ class GrepToolInvocation extends BaseToolInvocation<
       '--no-heading',
       '--with-filename',
       '--ignore-case',
-      '--regexp',
-      pattern,
     ];
 
     if (include) {
@@ -388,6 +402,12 @@ class GrepToolInvocation extends BaseToolInvocation<
     });
 
     rgArgs.push('--threads', '4');
+    // Add pattern depending on whether we are using fixed-strings or regex
+    if (useFixedStrings) {
+      rgArgs.push('-F', pattern);
+    } else {
+      rgArgs.push('--regexp', pattern);
+    }
     rgArgs.push(absolutePath);
 
     try {
