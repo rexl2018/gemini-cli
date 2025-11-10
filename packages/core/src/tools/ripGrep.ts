@@ -96,6 +96,11 @@ export interface RipGrepToolParams {
    * File pattern to include in the search (e.g. "*.js", "*.{ts,tsx}")
    */
   include?: string;
+
+  /**
+   * Optional: Treat the pattern as a literal (fixed string) instead of a regex. Useful when the pattern contains special characters like {}, [], (), +, *, ?, |, ^, $, or backslashes that should be matched verbatim.
+   */
+  literal?: boolean;
 }
 
 /**
@@ -191,6 +196,7 @@ class GrepToolInvocation extends BaseToolInvocation<
           path: searchDir,
           include: this.params.include,
           signal,
+          literal: this.params.literal,
         });
 
         if (searchDirectories.length > 1) {
@@ -321,15 +327,18 @@ class GrepToolInvocation extends BaseToolInvocation<
     path: string;
     include?: string;
     signal: AbortSignal;
+    literal?: boolean;
   }): Promise<GrepMatch[]> {
     const { pattern, path: absolutePath, include } = options;
 
     // Decide whether to treat the pattern as a regex or a literal string
-    let useFixedStrings = false;
+    let useFixedStrings = options.literal !== false; // default to literal search unless explicitly set to false
     try {
-      // Try compiling the regex; if it fails, fallback to literal matching
-      // We only test validity here; actual matching will recreate with flags as needed
-      new RegExp(pattern);
+      if (!useFixedStrings) {
+        // Try compiling the regex; if it fails, fallback to literal matching
+        // We only test validity here; actual matching will recreate with flags as needed
+        new RegExp(pattern);
+      }
     } catch {
       useFixedStrings = true;
     }
@@ -499,6 +508,9 @@ class GrepToolInvocation extends BaseToolInvocation<
         description += ` across all workspace directories`;
       }
     }
+    if (this.params.literal !== false) {
+      description += ` (literal search)`;
+    }
     return description;
   }
 }
@@ -519,13 +531,13 @@ export class RipGrepTool extends BaseDeclarativeTool<
     super(
       RipGrepTool.Name,
       'SearchText',
-      'Searches for a regular expression pattern within the content of files in a specified directory or a single file (or current working directory). Can filter files by a glob pattern. Returns the lines containing matches, along with their file paths and line numbers. Total results limited to 20,000 matches like VSCode.',
+      'Searches for text using literal matching by default (fixed-string). Set literal=false to use regular expressions. Can filter files by a glob pattern. Returns the lines containing matches, along with their file paths and line numbers. Total results limited to 20,000 matches like VSCode.',
       Kind.Search,
       {
         properties: {
           pattern: {
             description:
-              "The regular expression (regex) pattern to search for within file contents (e.g., 'function\\s+myFunction', 'import\\s+\\{.*\\}\\s+from\\s+.*').",
+              "The pattern to search for. By default this is treated as a literal (fixed string). Set literal=false to treat it as a regular expression (e.g., 'function\\s+myFunction', 'import\\s+\\{.*\\}\\s+from\\s+.*').",
             type: 'string',
           },
           dir_path: {
@@ -537,6 +549,12 @@ export class RipGrepTool extends BaseDeclarativeTool<
             description:
               "Optional: A glob pattern to filter which files are searched (e.g., '*.js', '*.{ts,tsx}', 'src/**'). If omitted, searches all files (respecting potential global ignores).",
             type: 'string',
+          },
+          literal: {
+            description:
+              'Optional: Treat the pattern as a literal (fixed string) instead of a regex. Default: true. Set to false to enable regex mode. Use this when searching for text that contains regex metacharacters like {}[]()|?+*.^$ or backslashes.',
+            type: 'boolean',
+            default: true,
           },
         },
         required: ['pattern'],
