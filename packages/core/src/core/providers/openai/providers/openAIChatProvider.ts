@@ -142,9 +142,17 @@ export class OpenAIChatProvider implements LLMProvider {
       debugLogger.log(
         `[OpenAICompRaw] response: ${stringifyForLog(response.data)}`,
       );
-      if (useResponses && !this.hasResponsesToolCalls(response.data)) {
+      // Only fall back to chat/completions if tools were requested but the Responses API
+      // result did not include any tool calls. For pure text generations (like /compress),
+      // we should not fall back.
+      const requestedTools = Array.isArray(tools) && tools.length > 0;
+      if (
+        useResponses &&
+        requestedTools &&
+        !this.hasResponsesToolCalls(response.data)
+      ) {
         debugLogger.log(
-          '[OpenAIComp] No tool_call in Responses result; falling back to chat/completions for tool calling',
+          '[OpenAIComp] Responses result missing tool_call while tools were requested; falling back to chat/completions',
         );
         const chatUrl = this.getTargetURL(false);
         const chatBody = this.buildChatRequestBody(

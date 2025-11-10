@@ -26,7 +26,7 @@ export interface OpenAIConfig {
   protocol?: 'responses_api' | 'chat_completion';
 }
 
-const DEFAULT_TIMEOUT_MS = 90_000;
+const DEFAULT_TIMEOUT_MS = 150_000;
 
 export class OpenAICompatibleContentGenerator implements ContentGenerator {
   private provider: LLMProvider;
