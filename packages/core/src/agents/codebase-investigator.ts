@@ -18,11 +18,16 @@ import { z } from 'zod';
 const CodebaseInvestigationReportSchema = z.object({
   SummaryOfFindings: z
     .string()
+    .min(20, {
+      message:
+        'SummaryOfFindings must be a substantive non-empty summary (>= 20 characters).',
+    })
     .describe(
       "A summary of the investigation's conclusions and insights for the main agent.",
     ),
   ExplorationTrace: z
     .array(z.string())
+    .min(1, { message: 'ExplorationTrace must include at least one step.' })
     .describe(
       'A step-by-step list of actions and tools used during the investigation.',
     ),
@@ -30,10 +35,17 @@ const CodebaseInvestigationReportSchema = z.object({
     .array(
       z.object({
         FilePath: z.string(),
-        Reasoning: z.string(),
+        Reasoning: z.string().min(10, {
+          message:
+            'Reasoning must explain why the file is relevant (>= 10 characters).',
+        }),
         KeySymbols: z.array(z.string()),
       }),
     )
+    .min(1, {
+      message:
+        'RelevantLocations must contain at least one relevant file with reasoning and symbols.',
+    })
     .describe('A list of relevant files and the key symbols within them.'),
 });
 

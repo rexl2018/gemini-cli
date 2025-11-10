@@ -962,6 +962,18 @@ export class AgentExecutor<TOutput extends z.ZodTypeAny> {
         properties: {},
         required: [],
       },
+      // Add OpenAI-compatible JSON Schema to avoid invalid_function_parameters errors
+      parametersJsonSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    } as FunctionDeclaration & {
+      parametersJsonSchema?: {
+        type: string;
+        properties: Record<string, unknown>;
+        required: string[];
+      };
     };
 
     if (outputConfig) {
@@ -974,6 +986,16 @@ export class AgentExecutor<TOutput extends z.ZodTypeAny> {
       completeTool.parameters!.properties![outputConfig.outputName] =
         schema as Schema;
       completeTool.parameters!.required!.push(outputConfig.outputName);
+      // Keep the OpenAI JSON schema in sync
+      (
+        completeTool.parametersJsonSchema as {
+          properties: Record<string, unknown>;
+          required: string[];
+        }
+      ).properties[outputConfig.outputName] = schema as Record<string, unknown>;
+      (
+        completeTool.parametersJsonSchema as { required: string[] }
+      ).required.push(outputConfig.outputName);
     }
 
     toolsList.push(completeTool);
