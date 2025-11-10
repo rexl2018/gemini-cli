@@ -51,7 +51,7 @@ const DEFAULT_RETRY_OPTIONS: RetryOptions = {
  * @param retryFetchErrors Whether to retry on specific fetch errors.
  * @returns True if the error is a transient error, false otherwise.
  */
-function defaultShouldRetry(
+export function defaultShouldRetry(
   error: Error | unknown,
   retryFetchErrors?: boolean,
 ): boolean {

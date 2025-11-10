@@ -13,6 +13,7 @@ import type {
   GenerateContentResponse,
 } from '@google/genai';
 import { debugLogger } from '../utils/debugLogger.js';
+import { retryWithBackoff, defaultShouldRetry } from '../utils/retry.js';
 import type { ContentGenerator } from './contentGenerator.js';
 import type { LLMProvider, ProviderConfig } from './providers/types.js';
 import { createOpenAIProvider } from './providers/openai/openaiProviderFactory.js';
@@ -25,7 +26,7 @@ export interface OpenAIConfig {
   protocol?: 'responses_api' | 'chat_completion';
 }
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_TIMEOUT_MS = 90_000;
 
 export class OpenAICompatibleContentGenerator implements ContentGenerator {
   private provider: LLMProvider;
@@ -55,18 +56,11 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     debugLogger.log(
       `[BYOK] generateContent model=${request.model} promptId=${userPromptId} payloadParts=${Array.isArray(request.contents) ? request.contents.length : 1}`,
     );
-    try {
-      const response = await this.provider.generate(request, userPromptId);
-      debugLogger.log(
-        `[BYOK] generateContent success model=${request.model} responseCandidates=${response.candidates?.length ?? 0}`,
-      );
-      return response;
-    } catch (error) {
-      debugLogger.error(
-        `[BYOK] generateContent failed model=${request.model} promptId=${userPromptId}: ${(error as Error)?.message ?? error}`,
-      );
-      throw error;
-    }
+    return this.executeWithRetry(
+      () => this.provider.generate(request, userPromptId),
+      request.model,
+      userPromptId,
+    );
   }
 
   async generateContentStream(
@@ -77,15 +71,64 @@ export class OpenAICompatibleContentGenerator implements ContentGenerator {
     debugLogger.log(
       `[BYOK] generateContentStream model=${request.model} promptId=${userPromptId} payloadParts=${Array.isArray(request.contents) ? request.contents.length : 1}`,
     );
+    const stream = await this.executeWithRetry(
+      () => this.provider.generateStream(request, userPromptId),
+      request.model,
+      userPromptId,
+    );
+    return this.wrapStream(stream, request.model, userPromptId);
+  }
+
+  private async executeWithRetry<T>(
+    fn: () => Promise<T>,
+    model: string,
+    promptId: string,
+  ): Promise<T> {
     try {
-      const stream = await this.provider.generateStream(request, userPromptId);
-      return this.wrapStream(stream, request.model, userPromptId);
+      const result = await retryWithBackoff(fn, {
+        shouldRetryOnError: (error) =>
+          this.shouldRetryOnError(error, model, promptId),
+      });
+      debugLogger.log(
+        `[BYOK] request success model=${model} promptId=${promptId}`,
+      );
+      return result;
     } catch (error) {
       debugLogger.error(
-        `[BYOK] generateContentStream failed model=${request.model} promptId=${userPromptId}: ${(error as Error)?.message ?? error}`,
+        `[BYOK] request failed model=${model} promptId=${promptId}: ${(error as Error)?.message ?? error}`,
       );
       throw error;
     }
+  }
+
+  private shouldRetryOnError(
+    error: unknown,
+    model: string,
+    promptId: string,
+  ): boolean {
+    if (!error || typeof error !== 'object') {
+      return defaultShouldRetry(error as Error);
+    }
+
+    const maybeError = error as { code?: unknown; message?: unknown };
+    const code =
+      typeof maybeError.code === 'string' ? maybeError.code : undefined;
+    const message =
+      typeof maybeError.message === 'string' ? maybeError.message : undefined;
+
+    const isTimeout =
+      code === 'ECONNABORTED' ||
+      (message !== undefined && message.toLowerCase().includes('timeout'));
+
+    if (isTimeout) {
+      debugLogger.warn(
+        `[BYOK] timeout encountered model=${model} promptId=${promptId}; retrying...`,
+        error,
+      );
+      return true;
+    }
+
+    return defaultShouldRetry(error as Error);
   }
 
   private async *wrapStream(
