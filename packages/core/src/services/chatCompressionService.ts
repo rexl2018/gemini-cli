@@ -84,13 +84,10 @@ export class ChatCompressionService {
     config: Config,
     hasFailedCompressionAttempt: boolean,
   ): Promise<{ newHistory: Content[] | null; info: ChatCompressionInfo }> {
-    const curatedHistory = chat.getHistory(true);
+    const fullHistory = chat.getHistory(false);
 
     // Regardless of `force`, don't do anything if the history is empty.
-    if (
-      curatedHistory.length === 0 ||
-      (hasFailedCompressionAttempt && !force)
-    ) {
+    if (fullHistory.length === 0 || (hasFailedCompressionAttempt && !force)) {
       return {
         newHistory: null,
         info: {
@@ -101,7 +98,13 @@ export class ChatCompressionService {
       };
     }
 
-    const originalTokenCount = chat.getLastPromptTokenCount();
+    // Calculate original token count based on the actual full history length (same method as newTokenCount)
+    const originalTokenCount = Math.floor(
+      fullHistory.reduce(
+        (total, content) => total + JSON.stringify(content).length,
+        0,
+      ) / 4,
+    );
 
     // Don't compress if not forced and we are under the limit.
     if (!force) {
@@ -121,12 +124,12 @@ export class ChatCompressionService {
     }
 
     const splitPoint = findCompressSplitPoint(
-      curatedHistory,
+      fullHistory,
       1 - COMPRESSION_PRESERVE_THRESHOLD,
     );
 
-    const historyToCompress = curatedHistory.slice(0, splitPoint);
-    const historyToKeep = curatedHistory.slice(splitPoint);
+    const historyToCompress = fullHistory.slice(0, splitPoint);
+    const historyToKeep = fullHistory.slice(splitPoint);
 
     if (historyToCompress.length === 0) {
       return {

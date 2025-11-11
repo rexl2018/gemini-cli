@@ -39,11 +39,11 @@ export function CompressionMessage({
       case CompressionStatus.COMPRESSION_FAILED_INFLATED_TOKEN_COUNT:
         // For smaller histories (< 50k tokens), compression overhead likely exceeds benefits
         if (originalTokens < 50000) {
-          return 'Compression was not beneficial for this history size.';
+          return `Compression was not beneficial for this history size. Original: ${originalTokens} tokens, After compression: ${newTokens} tokens.`;
         }
         // For larger histories where compression should work but didn't,
         // this suggests an issue with the compression process itself
-        return 'Chat history compression did not reduce size. This may indicate issues with the compression prompt.';
+        return `Chat history compression did not reduce size. Original: ${originalTokens} tokens, After compression: ${newTokens} tokens. This may indicate issues with the compression prompt.`;
       case CompressionStatus.COMPRESSION_FAILED_TOKEN_COUNT_ERROR:
         return 'Could not compress chat history due to a token counting error.';
       case CompressionStatus.NOOP:
