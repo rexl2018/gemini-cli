@@ -11,6 +11,8 @@
 import type { Content, FunctionDeclaration } from '@google/genai';
 import type { AnyDeclarativeTool } from '../tools/tools.js';
 import { type z } from 'zod';
+import type { LlmProviderConfig } from '../config/config.js';
+import type { AuthType } from '../core/contentGenerator.js';
 
 /**
  * Describes the possible termination modes for an agent.
@@ -63,6 +65,10 @@ export interface AgentDefinition<TOutput extends z.ZodTypeAny = z.ZodUnknown> {
   toolConfig?: ToolConfig;
   outputConfig?: OutputConfig<TOutput>;
   inputConfig: InputConfig;
+  /** Optional per-agent provider override (endpoint, model, protocol, api key). */
+  providerConfig?: LlmProviderConfig;
+  /** Optional per-agent auth type override (e.g., USE_LLM_BYOK). */
+  authType?: AuthType;
   /**
    * An optional function to process the raw output from the agent's final tool
    * call into a string format.

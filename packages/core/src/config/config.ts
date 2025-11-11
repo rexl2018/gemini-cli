@@ -1240,6 +1240,88 @@ export class Config {
     return this.enableToolOutputTruncation;
   }
 
+  /**
+   * Creates a scoped Config for per-agent provider routing.
+   * The scoped Config shares registry/services with the base Config but uses
+   * overridden provider/model/auth for LLM calls.
+   */
+  async createScopedConfig(overrides: {
+    providerConfig?: LlmProviderConfig;
+    model?: string;
+    authType?: AuthType;
+  }): Promise<Config> {
+    const params: ConfigParameters = {
+      sessionId: `${this.getSessionId()}:scoped`,
+      targetDir: this.getTargetDir(),
+      debugMode: this.getDebugMode(),
+      cwd: this.getWorkingDir(),
+      model: overrides.model ?? this.getModel(),
+      providerConfig: overrides.providerConfig ?? this.getProviderConfig(),
+      coreTools: this.getCoreTools(),
+      allowedTools: this.getAllowedTools(),
+      excludeTools: this.getExcludeTools()
+        ? Array.from(this.getExcludeTools()!)
+        : undefined,
+      sandbox: this.getSandbox(),
+      proxy: this.getProxy(),
+      useModelRouter: this.getUseModelRouter(),
+      disableModelRouterForAuth: this.disableModelRouterForAuth,
+      folderTrust: this.getFolderTrust(),
+      ideMode: this.getIdeMode(),
+      enableInteractiveShell: this.getEnableInteractiveShell(),
+      skipNextSpeakerCheck: this.getSkipNextSpeakerCheck(),
+      shellExecutionConfig: this.getShellExecutionConfig(),
+      extensionLoader: this.getExtensionLoader(),
+      enabledExtensions: this.getEnabledExtensions(),
+      enableExtensionReloading: this.getEnableExtensionReloading(),
+      allowedMcpServers: this.getAllowedMcpServers(),
+      blockedMcpServers: this.getBlockedMcpServers(),
+      mcpServerCommand: this.getMcpServerCommand(),
+      mcpServers: this.getMcpServers(),
+      summarizeToolOutput: this.getSummarizeToolOutputConfig(),
+      output: this.outputSettings,
+      enableMessageBusIntegration: this.getEnableMessageBusIntegration(),
+      codebaseInvestigatorSettings: this.getCodebaseInvestigatorSettings(),
+      continueOnFailedApiCall: this.getContinueOnFailedApiCall(),
+      retryFetchErrors: this.getRetryFetchErrors(),
+      enableShellOutputEfficiency: this.getEnableShellOutputEfficiency(),
+      fakeResponses: this.fakeResponses,
+      recordResponses: this.recordResponses,
+      ptyInfo: this.ptyInfo,
+      disableYoloMode: this.isYoloModeDisabled(),
+
+      enableHooks: this.enableHooks,
+      experiments: this.experiments,
+      hooks: this.hooks,
+    };
+
+    const scoped = new Config(params);
+    // Share registries/services from base to avoid duplicate initialization.
+    scoped.toolRegistry = this.toolRegistry;
+    scoped.mcpClientManager = this.mcpClientManager;
+    scoped.promptRegistry = this.promptRegistry;
+    scoped.agentRegistry = this.agentRegistry;
+    scoped.initialized = this.initialized;
+
+    // Determine effective auth type.
+    let auth: AuthType | undefined = overrides.authType;
+    if (!auth) {
+      const prov = overrides.providerConfig ?? this.getProviderConfig();
+      if (prov?.llm_provider === 'llm_byok_openai') {
+        auth = AuthType.USE_LLM_BYOK;
+      } else {
+        auth = this.getContentGeneratorConfig()?.authType as
+          | AuthType
+          | undefined;
+      }
+    }
+    if (auth) {
+      await scoped.refreshAuth(auth);
+    }
+
+    return scoped;
+  }
+
   getTruncateToolOutputThreshold(): number {
     return Math.min(
       // Estimate remaining context window in characters (1 token ~= 4 chars).

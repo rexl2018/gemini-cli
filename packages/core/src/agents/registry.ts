@@ -5,6 +5,7 @@
  */
 
 import { DEFAULT_PROVIDER_CONFIG, type Config } from '../config/config.js';
+import { AuthType } from '../core/contentGenerator.js';
 import type { AgentDefinition } from './types.js';
 import { CodebaseInvestigatorAgent } from './codebase-investigator.js';
 import { type z } from 'zod';
@@ -40,6 +41,10 @@ export class AgentRegistry {
     if (investigatorSettings?.enabled) {
       const providerConfig =
         investigatorSettings.providerConfig ?? DEFAULT_PROVIDER_CONFIG;
+      const authType =
+        providerConfig?.llm_provider === 'llm_byok_openai'
+          ? AuthType.USE_LLM_BYOK
+          : undefined;
       const agentDef = {
         ...CodebaseInvestigatorAgent,
         modelConfig: {
@@ -62,6 +67,7 @@ export class AgentRegistry {
             CodebaseInvestigatorAgent.runConfig.max_turns,
         },
         providerConfig,
+        authType,
       };
       this.registerAgent(agentDef);
     }

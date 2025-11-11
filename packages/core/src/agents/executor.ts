@@ -104,15 +104,21 @@ export class AgentExecutor<TOutput extends z.ZodTypeAny> {
     runtimeContext: Config,
     onActivity?: ActivityCallback,
   ): Promise<AgentExecutor<TOutput>> {
-    // Create an isolated tool registry for this agent instance.
-    const agentToolRegistry = new ToolRegistry(runtimeContext);
-    const parentToolRegistry = await runtimeContext.getToolRegistry();
+    const effectiveContext =
+      definition.providerConfig || definition.authType
+        ? await runtimeContext.createScopedConfig({
+            providerConfig: definition.providerConfig,
+            authType: definition.authType,
+            model: definition.modelConfig.model,
+          })
+        : runtimeContext;
+
+    const agentToolRegistry = new ToolRegistry(effectiveContext);
+    const parentToolRegistry = await effectiveContext.getToolRegistry();
 
     if (definition.toolConfig) {
       for (const toolRef of definition.toolConfig.tools) {
         if (typeof toolRef === 'string') {
-          // If the tool is referenced by name, retrieve it from the parent
-          // registry and register it with the agent's isolated registry.
           const toolFromParent = parentToolRegistry.getTool(toolRef);
           if (toolFromParent) {
             agentToolRegistry.registerTool(toolFromParent);
@@ -124,22 +130,16 @@ export class AgentExecutor<TOutput extends z.ZodTypeAny> {
         ) {
           agentToolRegistry.registerTool(toolRef);
         }
-        // Note: Raw `FunctionDeclaration` objects in the config don't need to be
-        // registered; their schemas are passed directly to the model later.
       }
-
       agentToolRegistry.sortTools();
-      // Validate that all registered tools are safe for non-interactive
-      // execution.
       await AgentExecutor.validateTools(agentToolRegistry, definition.name);
     }
 
-    // Get the parent prompt ID from context
     const parentPromptId = promptIdContext.getStore();
 
     return new AgentExecutor(
       definition,
-      runtimeContext,
+      effectiveContext,
       agentToolRegistry,
       parentPromptId,
       onActivity,
