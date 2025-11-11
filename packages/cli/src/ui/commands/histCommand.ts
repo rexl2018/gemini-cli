@@ -38,8 +38,8 @@ function formatHistoryLine(index: number, content: Content): string {
   return `${line.slice(0, MAX_HISTORY_LINE_LENGTH - 1)}…`;
 }
 
-const listCommand: SlashCommand = {
-  name: 'list',
+const listallCommand: SlashCommand = {
+  name: 'listall',
   description: 'List the entire current conversation history',
   kind: CommandKind.BUILT_IN,
   action: async (context): Promise<void | MessageActionReturn> => {
@@ -69,10 +69,10 @@ const listCommand: SlashCommand = {
   },
 };
 
-const listnCommand: SlashCommand = {
-  name: 'listn',
+const llCommand: SlashCommand = {
+  name: 'll',
   description:
-    'List the last N entries of the current conversation. Usage: /hist listn <n>',
+    'List the last N entries of the current conversation. Usage: /hist ll <n> (ll means "list last")',
   kind: CommandKind.BUILT_IN,
   action: async (context, args): Promise<void | MessageActionReturn> => {
     const nStr = args.trim();
@@ -81,7 +81,7 @@ const listnCommand: SlashCommand = {
       return {
         type: 'message',
         messageType: 'error',
-        content: 'Invalid number. Usage: /hist listn <n>',
+        content: 'Invalid number. Usage: /hist ll <n>',
       };
     }
 
@@ -367,13 +367,71 @@ const deleteBeforeCommand: SlashCommand = {
   },
 };
 
+const laCommand: SlashCommand = {
+  name: 'la',
+  description:
+    'List entries around the Nth entry (n-2 to n+2). Usage: /hist la <n> (la means "list around")',
+  kind: CommandKind.BUILT_IN,
+  action: async (context, args): Promise<void | MessageActionReturn> => {
+    const nStr = args.trim();
+    const n = Number.parseInt(nStr, 10);
+    if (!nStr || Number.isNaN(n) || n <= 0) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: 'Invalid number. Usage: /hist la <n>',
+      };
+    }
+
+    const chat = await context.services.config?.getGeminiClient()?.getChat();
+    if (!chat) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: 'No chat client available to list conversation history.',
+      };
+    }
+
+    const history = chat.getHistory();
+    if (!history || history.length === 0) {
+      return {
+        type: 'message',
+        messageType: 'info',
+        content: 'No conversation history found.',
+      };
+    }
+
+    if (n > history.length) {
+      return {
+        type: 'message',
+        messageType: 'error',
+        content: `Invalid index. There are only ${history.length} entries in history.`,
+      };
+    }
+
+    // Show entries from n-3 to n+1 (array indices are 0-based)
+    // This corresponds to user-visible indices n-2 to n+2
+    const startIndex = Math.max(0, n - 3);
+    const endIndex = Math.min(history.length, n + 1);
+
+    const around = history.slice(startIndex, endIndex + 1);
+
+    around.forEach((c, i) => {
+      const index = startIndex + i + 1;
+      const line = formatHistoryLine(index, c);
+      context.ui.addItem({ type: MessageType.INFO, text: line }, Date.now());
+    });
+  },
+};
+
 export const histCommand: SlashCommand = {
   name: 'hist',
   description: 'Operate and manage the current conversation history',
   kind: CommandKind.BUILT_IN,
   subCommands: [
-    listCommand,
-    listnCommand,
+    listallCommand,
+    llCommand,
+    laCommand,
     deleteCommand,
     deleteAfterCommand,
     deleteLastCommand,

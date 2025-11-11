@@ -42,12 +42,12 @@ describe('histCommand', () => {
     });
   });
 
-  it('truncates long history entries for /hist list', async () => {
-    const listCommand = histCommand.subCommands?.find(
-      (command) => command.name === 'list',
+  it('truncates long history entries for /hist listall', async () => {
+    const listallCommand = histCommand.subCommands?.find(
+      (command) => command.name === 'listall',
     );
-    if (!listCommand?.action) {
-      throw new Error('list command must have an action');
+    if (!listallCommand?.action) {
+      throw new Error('listall command must have an action');
     }
 
     const longText = 'A'.repeat(2100);
@@ -57,7 +57,7 @@ describe('histCommand', () => {
       getHistory: () => history,
     });
 
-    await listCommand.action(mockContext, '');
+    await listallCommand.action(mockContext, '');
 
     const addItemMock = mockContext.ui.addItem as Mock;
     expect(addItemMock).toHaveBeenCalledTimes(1);
@@ -70,12 +70,12 @@ describe('histCommand', () => {
     expect(text.endsWith(ELLIPSIS)).toBe(true);
   });
 
-  it('applies truncation when /hist listn outputs the last entries', async () => {
-    const listnCommand = histCommand.subCommands?.find(
-      (command) => command.name === 'listn',
+  it('applies truncation when /hist ll outputs the last entries', async () => {
+    const llCommand = histCommand.subCommands?.find(
+      (command) => command.name === 'll',
     );
-    if (!listnCommand?.action) {
-      throw new Error('listn command must have an action');
+    if (!llCommand?.action) {
+      throw new Error('ll command must have an action');
     }
 
     const shortText = 'short model response';
@@ -90,7 +90,7 @@ describe('histCommand', () => {
       getHistory: () => history,
     });
 
-    await listnCommand.action(mockContext, '2');
+    await llCommand.action(mockContext, '2');
 
     const addItemMock = mockContext.ui.addItem as Mock;
     expect(addItemMock).toHaveBeenCalledTimes(2);
@@ -107,6 +107,46 @@ describe('histCommand', () => {
     expect(truncatedText.startsWith('3. [model] ')).toBe(true);
     expect(truncatedText.length).toBe(MAX_HISTORY_LINE_LENGTH);
     expect(truncatedText.endsWith(ELLIPSIS)).toBe(true);
+  });
+
+  it('lists entries around the Nth entry for /hist la', async () => {
+    const laCommand = histCommand.subCommands?.find(
+      (command) => command.name === 'la',
+    );
+    if (!laCommand?.action) {
+      throw new Error('la command must have an action');
+    }
+
+    const history: Content[] = [
+      makeContent('user', 'entry 1'),
+      makeContent('model', 'entry 2'),
+      makeContent('user', 'entry 3'),
+      makeContent('model', 'entry 4'),
+      makeContent('user', 'entry 5'),
+      makeContent('model', 'entry 6'),
+      makeContent('user', 'entry 7'),
+      makeContent('model', 'entry 8'),
+      makeContent('user', 'entry 9'),
+      makeContent('model', 'entry 10'),
+    ];
+
+    mockGetChat.mockResolvedValue({
+      getHistory: () => history,
+    });
+
+    await laCommand.action(mockContext, '5');
+
+    const addItemMock = mockContext.ui.addItem as Mock;
+    // Should list 5 entries: 3,4,5,6,7
+    expect(addItemMock).toHaveBeenCalledTimes(5);
+
+    // Check each entry is listed correctly
+    const calls = addItemMock.mock.calls;
+    expect(calls[0][0].text).toBe('3. [user] entry 3');
+    expect(calls[1][0].text).toBe('4. [model] entry 4');
+    expect(calls[2][0].text).toBe('5. [user] entry 5');
+    expect(calls[3][0].text).toBe('6. [model] entry 6');
+    expect(calls[4][0].text).toBe('7. [user] entry 7');
   });
 
   describe('delete subcommands', () => {
