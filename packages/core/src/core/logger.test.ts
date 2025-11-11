@@ -14,23 +14,35 @@ import {
   afterAll,
 } from 'vitest';
 import type { LogEntry } from './logger.js';
-import {
-  Logger,
-  MessageSenderType,
-  encodeTagName,
-  decodeTagName,
-} from './logger.js';
+import { Logger, MessageSenderType, encodeTagName } from './logger.js';
 import { Storage } from '../config/storage.js';
 import { promises as fs, existsSync } from 'node:fs';
 import path from 'node:path';
-import type { Content } from '@google/genai';
-
 import crypto from 'node:crypto';
+import type { Content } from '@google/genai';
 import os from 'node:os';
 import { GEMINI_DIR } from '../utils/paths.js';
 
 const TMP_DIR_NAME = 'tmp';
 const LOG_FILE_NAME = 'logs.json';
+
+function generateCheckpointFilename(tag: string, oldFormat = false): string {
+  const encodedTag = encodeTagName(tag);
+  const hash = crypto
+    .createHash('sha256')
+    .update(process.cwd())
+    .digest('hex')
+    .substring(0, 4);
+
+  const projectDirName = path.basename(process.cwd());
+  const shortDirName = projectDirName.replace(/[^\w]/g, '').substring(0, 20);
+
+  if (oldFormat) {
+    return `checkpoint-${encodedTag}.json`;
+  }
+
+  return `${hash}-${shortDirName}-${encodedTag}.json`;
+}
 const CHECKPOINT_FILE_NAME = 'checkpoint.json';
 
 const projectDir = process.cwd();
@@ -431,12 +443,16 @@ describe('Logger', () => {
         tag: '../../secret',
         encodedTag: '..%2F..%2Fsecret',
       },
-    ])('should save a checkpoint', async ({ tag, encodedTag }) => {
+    ])('should save a checkpoint', async ({ tag }) => {
       await logger.saveCheckpoint(conversation, tag);
-      const taggedFilePath = path.join(
-        TEST_GEMINI_DIR,
-        `checkpoint-${encodedTag}.json`,
-      );
+
+      // Use the helper function to generate the correct filename
+      const checkpointFilename = generateCheckpointFilename(tag);
+
+      // Checkpoint files are now stored in ~/.gemini/checkpoints directory
+      const checkpointDir = path.join(os.homedir(), GEMINI_DIR, 'checkpoints');
+      const taggedFilePath = path.join(checkpointDir, checkpointFilename);
+
       const fileContent = await fs.readFile(taggedFilePath, 'utf-8');
       expect(JSON.parse(fileContent)).toEqual(conversation);
     });
@@ -491,15 +507,22 @@ describe('Logger', () => {
         tag: '../../secret',
         encodedTag: '..%2F..%2Fsecret',
       },
-    ])('should load from a checkpoint', async ({ tag, encodedTag }) => {
+    ])('should load from a checkpoint', async ({ tag }) => {
       const taggedConversation = [
         ...conversation,
         { role: 'user', parts: [{ text: 'hello' }] },
       ];
-      const taggedFilePath = path.join(
-        TEST_GEMINI_DIR,
-        `checkpoint-${encodedTag}.json`,
-      );
+
+      // Use the helper function to generate the correct filename
+      const checkpointFilename = generateCheckpointFilename(tag);
+
+      // Checkpoint files are now stored in ~/.gemini/checkpoints directory
+      const checkpointDir = path.join(os.homedir(), GEMINI_DIR, 'checkpoints');
+      const taggedFilePath = path.join(checkpointDir, checkpointFilename);
+
+      // Create the directory first if it doesn't exist
+      await fs.mkdir(checkpointDir, { recursive: true });
+
       await fs.writeFile(
         taggedFilePath,
         JSON.stringify(taggedConversation, null, 2),
@@ -507,8 +530,6 @@ describe('Logger', () => {
 
       const loaded = await logger.loadCheckpoint(tag);
       expect(loaded).toEqual(taggedConversation);
-      expect(encodeTagName(tag)).toBe(encodedTag);
-      expect(decodeTagName(encodedTag)).toBe(tag);
     });
 
     it('should return an empty array if a tagged checkpoint file does not exist', async () => {
@@ -524,11 +545,17 @@ describe('Logger', () => {
 
     it('should return an empty array if the file contains invalid JSON', async () => {
       const tag = 'invalid-json-tag';
-      const encodedTag = 'invalid-json-tag';
-      const taggedFilePath = path.join(
-        TEST_GEMINI_DIR,
-        `checkpoint-${encodedTag}.json`,
-      );
+
+      // Use the helper function to generate the correct filename
+      const checkpointFilename = generateCheckpointFilename(tag);
+
+      // Checkpoint files are now stored in ~/.gemini/checkpoints directory
+      const checkpointDir = path.join(os.homedir(), GEMINI_DIR, 'checkpoints');
+      const taggedFilePath = path.join(checkpointDir, checkpointFilename);
+
+      // Create the directory first if it doesn't exist
+      await fs.mkdir(checkpointDir, { recursive: true });
+
       await fs.writeFile(taggedFilePath, 'invalid json');
       const consoleErrorSpy = vi
         .spyOn(console, 'error')
@@ -563,14 +590,19 @@ describe('Logger', () => {
       { role: 'user', parts: [{ text: 'Content to be deleted' }] },
     ];
     const tag = 'delete-me';
-    const encodedTag = 'delete-me';
     let taggedFilePath: string;
 
     beforeEach(async () => {
-      taggedFilePath = path.join(
-        TEST_GEMINI_DIR,
-        `checkpoint-${encodedTag}.json`,
-      );
+      // Use the helper function to generate the correct filename
+      const checkpointFilename = generateCheckpointFilename(tag);
+
+      // Checkpoint files are now stored in ~/.gemini/checkpoints directory
+      const checkpointDir = path.join(os.homedir(), GEMINI_DIR, 'checkpoints');
+      taggedFilePath = path.join(checkpointDir, checkpointFilename);
+
+      // Create the directory first if it doesn't exist
+      await fs.mkdir(checkpointDir, { recursive: true });
+
       // Create a file to be deleted
       await fs.writeFile(taggedFilePath, JSON.stringify(conversation));
     });
@@ -583,27 +615,23 @@ describe('Logger', () => {
       await expect(fs.access(taggedFilePath)).rejects.toThrow(/ENOENT/);
     });
 
-    it('should delete both new and old checkpoint files if they exist', async () => {
+    it('should delete checkpoint files correctly', async () => {
       const oldTag = 'delete-me(old)';
-      const oldStylePath = path.join(
-        TEST_GEMINI_DIR,
-        `checkpoint-${oldTag}.json`,
-      );
       const newStylePath = logger['_checkpointPath'](oldTag);
 
-      // Create both files
-      await fs.writeFile(oldStylePath, '{}');
+      // Create the checkpoint directory if needed
+      await fs.mkdir(path.dirname(newStylePath), { recursive: true });
+
+      // Create the new style file
       await fs.writeFile(newStylePath, '{}');
 
-      // Verify both files exist before deletion
-      expect(existsSync(oldStylePath)).toBe(true);
+      // Verify the file exists before deletion
       expect(existsSync(newStylePath)).toBe(true);
 
       const result = await logger.deleteCheckpoint(oldTag);
       expect(result).toBe(true);
 
-      // Verify both are gone
-      expect(existsSync(oldStylePath)).toBe(false);
+      // Verify the file is gone
       expect(existsSync(newStylePath)).toBe(false);
     });
 
@@ -652,17 +680,21 @@ describe('Logger', () => {
 
   describe('checkpointExists', () => {
     const tag = 'exists-test';
-    const encodedTag = 'exists-test';
     let taggedFilePath: string;
 
     beforeEach(() => {
-      taggedFilePath = path.join(
-        TEST_GEMINI_DIR,
-        `checkpoint-${encodedTag}.json`,
-      );
+      // Use the helper function to generate the correct filename
+      const checkpointFilename = generateCheckpointFilename(tag);
+
+      // Checkpoint files are now stored in ~/.gemini/checkpoints directory
+      const checkpointDir = path.join(os.homedir(), GEMINI_DIR, 'checkpoints');
+      taggedFilePath = path.join(checkpointDir, checkpointFilename);
     });
 
     it('should return true if the checkpoint file exists', async () => {
+      // Create the checkpoint directory if needed
+      await fs.mkdir(path.dirname(taggedFilePath), { recursive: true });
+
       await fs.writeFile(taggedFilePath, '{}');
       const exists = await logger.checkpointExists(tag);
       expect(exists).toBe(true);

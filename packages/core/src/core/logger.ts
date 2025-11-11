@@ -5,9 +5,11 @@
  */
 
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import type { Content } from '@google/genai';
 import type { Storage } from '../config/storage.js';
+import { Storage as StorageImpl } from '../config/storage.js';
 import { debugLogger } from '../utils/debugLogger.js';
 import { coreEvents } from '../utils/events.js';
 
@@ -276,16 +278,35 @@ export class Logger {
     if (!tag.length) {
       throw new Error('No checkpoint tag specified.');
     }
-    if (!this.geminiDir) {
-      throw new Error('Checkpoint file path not set.');
-    }
     // Encode the tag to handle all special characters safely.
     const encodedTag = encodeTagName(tag);
-    return path.join(this.geminiDir, `checkpoint-${encodedTag}.json`);
+
+    // Get project root and generate short hash (first 4 chars of SHA-256)
+    const projectRoot = this.storage.getProjectRoot();
+    const hash = crypto
+      .createHash('sha256')
+      .update(projectRoot)
+      .digest('hex')
+      .substring(0, 4);
+
+    // Get project directory name, filter to alphanumeric/underscore, take first 20 chars
+    const projectDirName = path.basename(projectRoot);
+    const shortDirName = projectDirName.replace(/[^\w]/g, '').substring(0, 20);
+
+    // Create checkpoint directory path: ~/.gemini/checkpoints
+    const checkpointDir = path.join(
+      StorageImpl.getGlobalGeminiDir(),
+      'checkpoints',
+    );
+
+    return path.join(
+      checkpointDir,
+      `${hash}-${shortDirName}-${encodedTag}.json`,
+    );
   }
 
   private async _getCheckpointPath(tag: string): Promise<string> {
-    // 1. Check for the new encoded path first.
+    // Check for the new path structure
     const newPath = this._checkpointPath(tag);
     try {
       await fs.access(newPath);
@@ -295,22 +316,34 @@ export class Logger {
       if (nodeError.code !== 'ENOENT') {
         throw error; // A real error occurred, rethrow it.
       }
-      // It was not found, so we'll check the old path next.
     }
 
-    // 2. Fallback for backward compatibility: check for the old raw path.
-    const oldPath = path.join(this.geminiDir!, `checkpoint-${tag}.json`);
+    // Fallback: Check all checkpoint files in the directory to find matches
+    const checkpointDir = path.join(
+      StorageImpl.getGlobalGeminiDir(),
+      'checkpoints',
+    );
     try {
-      await fs.access(oldPath);
-      return oldPath; // Found it, use the old path.
+      const files = await fs.readdir(checkpointDir);
+
+      // Filter files that match *-*-encodedTag.json (without checkpoint- prefix)
+      const matchedFiles = files.filter((file) =>
+        file.endsWith(`-${encodeTagName(tag)}.json`),
+      );
+
+      if (matchedFiles.length > 0) {
+        // Return the first match
+        return path.join(checkpointDir, matchedFiles[0]);
+      }
     } catch (error) {
+      // Ignore if directory doesn't exist
       const nodeError = error as NodeJS.ErrnoException;
       if (nodeError.code !== 'ENOENT') {
         throw error; // A real error occurred, rethrow it.
       }
     }
 
-    // 3. If neither path exists, return the new encoded path as the canonical one.
+    // If no matches found, return the new path as canonical
     return newPath;
   }
 
@@ -322,9 +355,18 @@ export class Logger {
       return;
     }
     // Always save with the new encoded path.
-    const path = this._checkpointPath(tag);
+    const checkpointPath = this._checkpointPath(tag);
+    const checkpointDir = path.dirname(checkpointPath);
+
     try {
-      await fs.writeFile(path, JSON.stringify(conversation, null, 2), 'utf-8');
+      // Create checkpoint directory if it doesn't exist
+      await fs.mkdir(checkpointDir, { recursive: true });
+
+      await fs.writeFile(
+        checkpointPath,
+        JSON.stringify(conversation, null, 2),
+        'utf-8',
+      );
     } catch (error) {
       debugLogger.error('Error writing to checkpoint file:', error);
     }
@@ -364,7 +406,7 @@ export class Logger {
   }
 
   async deleteCheckpoint(tag: string): Promise<boolean> {
-    if (!this.initialized || !this.geminiDir) {
+    if (!this.initialized) {
       debugLogger.error(
         'Logger not initialized or checkpoint file path not set. Cannot delete checkpoint.',
       );
@@ -373,16 +415,16 @@ export class Logger {
 
     let deletedSomething = false;
 
-    // 1. Attempt to delete the new encoded path.
-    const newPath = this._checkpointPath(tag);
+    // Attempt to delete the new path structure
+    const checkpointPath = this._checkpointPath(tag);
     try {
-      await fs.unlink(newPath);
+      await fs.unlink(checkpointPath);
       deletedSomething = true;
     } catch (error) {
       const nodeError = error as NodeJS.ErrnoException;
       if (nodeError.code !== 'ENOENT') {
         debugLogger.error(
-          `Failed to delete checkpoint file ${newPath}:`,
+          `Failed to delete checkpoint file ${checkpointPath}:`,
           error,
         );
         throw error; // Rethrow unexpected errors
@@ -390,22 +432,41 @@ export class Logger {
       // It's okay if it doesn't exist.
     }
 
-    // 2. Attempt to delete the old raw path for backward compatibility.
-    const oldPath = path.join(this.geminiDir!, `checkpoint-${tag}.json`);
-    if (newPath !== oldPath) {
-      try {
-        await fs.unlink(oldPath);
-        deletedSomething = true;
-      } catch (error) {
-        const nodeError = error as NodeJS.ErrnoException;
-        if (nodeError.code !== 'ENOENT') {
-          debugLogger.error(
-            `Failed to delete checkpoint file ${oldPath}:`,
-            error,
-          );
-          throw error; // Rethrow unexpected errors
+    // Fallback: Delete any other matching checkpoint files in the directory
+    const checkpointDir = path.join(
+      StorageImpl.getGlobalGeminiDir(),
+      'checkpoints',
+    );
+    try {
+      const files = await fs.readdir(checkpointDir);
+
+      // Filter files that match *-*-encodedTag.json (without checkpoint- prefix)
+      const matchedFiles = files.filter(
+        (file) =>
+          file.endsWith(`-${encodeTagName(tag)}.json`) &&
+          file !== path.basename(checkpointPath),
+      );
+
+      for (const file of matchedFiles) {
+        try {
+          await fs.unlink(path.join(checkpointDir, file));
+          deletedSomething = true;
+        } catch (unlinkError) {
+          const nodeUnlinkError = unlinkError as NodeJS.ErrnoException;
+          if (nodeUnlinkError.code !== 'ENOENT') {
+            debugLogger.error(
+              `Failed to delete checkpoint file ${file}:`,
+              unlinkError,
+            );
+            throw unlinkError; // Rethrow unexpected errors
+          }
         }
-        // It's okay if it doesn't exist.
+      }
+    } catch (error) {
+      // Ignore if directory doesn't exist
+      const nodeError = error as NodeJS.ErrnoException;
+      if (nodeError.code !== 'ENOENT') {
+        throw error; // A real error occurred, rethrow it.
       }
     }
 

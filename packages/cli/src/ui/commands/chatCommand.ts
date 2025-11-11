@@ -15,7 +15,7 @@ import type {
   SlashCommandActionReturn,
 } from './types.js';
 import { CommandKind } from './types.js';
-import { decodeTagName } from '@google/gemini-cli-core';
+import { decodeTagName, Storage } from '@google/gemini-cli-core';
 import path from 'node:path';
 import type {
   HistoryItemWithoutId,
@@ -30,21 +30,29 @@ const getSavedChatTags = async (
   mtSortDesc: boolean,
 ): Promise<ChatDetail[]> => {
   const cfg = context.services.config;
-  const geminiDir = cfg?.storage?.getProjectTempDir();
-  if (!geminiDir) {
+  if (!cfg?.storage) {
     return [];
   }
+
   try {
-    const file_head = 'checkpoint-';
     const file_tail = '.json';
-    const files = await fsPromises.readdir(geminiDir);
+    const checkpointDir = path.join(
+      Storage.getGlobalGeminiDir(),
+      'checkpoints',
+    );
+    const files = await fsPromises.readdir(checkpointDir);
     const chatDetails: ChatDetail[] = [];
 
     for (const file of files) {
-      if (file.startsWith(file_head) && file.endsWith(file_tail)) {
-        const filePath = path.join(geminiDir, file);
+      if (file.endsWith(file_tail)) {
+        const filePath = path.join(checkpointDir, file);
         const stats = await fsPromises.stat(filePath);
-        const tagName = file.slice(file_head.length, -file_tail.length);
+
+        // Extract tag name from filename: <hash>-<shortDir>-<tag>.json
+        const tagName = file
+          .slice(0, -file_tail.length)
+          .replace(/^[a-f0-9]{4}-[a-zA-Z0-9_]+-/, '');
+
         chatDetails.push({
           name: decodeTagName(tagName),
           mtime: stats.mtime.toISOString(),
@@ -60,6 +68,7 @@ const getSavedChatTags = async (
 
     return chatDetails;
   } catch (_err) {
+    // Ignore if directory doesn't exist
     return [];
   }
 };

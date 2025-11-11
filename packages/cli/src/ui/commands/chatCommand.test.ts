@@ -95,7 +95,7 @@ describe('chatCommand', () => {
     });
 
     it('should add a chat_list item to the UI', async () => {
-      const fakeFiles = ['checkpoint-test1.json', 'checkpoint-test2.json'];
+      const fakeFiles = ['abcd-test1.json', 'abcd-test2.json'];
       const date1 = new Date();
       const date2 = new Date(date1.getTime() + 1000);
 
@@ -276,7 +276,7 @@ describe('chatCommand', () => {
 
     describe('completion', () => {
       it('should provide completion suggestions', async () => {
-        const fakeFiles = ['checkpoint-alpha.json', 'checkpoint-beta.json'];
+        const fakeFiles = ['abcd-alpha.json', 'abcd-beta.json'];
         mockFs.readdir.mockImplementation(
           (async (_: string): Promise<string[]> =>
             fakeFiles as string[]) as unknown as typeof fsPromises.readdir,
@@ -295,7 +295,7 @@ describe('chatCommand', () => {
       });
 
       it('should suggest filenames sorted by modified time (newest first)', async () => {
-        const fakeFiles = ['checkpoint-test1.json', 'checkpoint-test2.json'];
+        const fakeFiles = ['abcd-test1.json', 'abcd-test2.json'];
         const date = new Date();
         mockFs.readdir.mockImplementation(
           (async (_: string): Promise<string[]> =>
@@ -356,7 +356,7 @@ describe('chatCommand', () => {
 
     describe('completion', () => {
       it('should provide completion suggestions', async () => {
-        const fakeFiles = ['checkpoint-alpha.json', 'checkpoint-beta.json'];
+        const fakeFiles = ['abcd-alpha.json', 'abcd-beta.json'];
         mockFs.readdir.mockImplementation(
           (async (_: string): Promise<string[]> =>
             fakeFiles as string[]) as unknown as typeof fsPromises.readdir,
